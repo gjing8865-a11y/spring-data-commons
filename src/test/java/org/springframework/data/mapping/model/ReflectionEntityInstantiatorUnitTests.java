@@ -60,7 +60,32 @@ class ReflectionEntityInstantiatorUnitTests<P extends PersistentProperty<P>> {
 	void instantiatesArrayCorrectly() {
 
 		doReturn(String[][].class).when(entity).getType();
-		INSTANCE.createInstance(entity, provider);
+		Object result = INSTANCE.createInstance(entity, provider);
+		assertThat(result.getClass()).isEqualTo(String[][].class);
+	}
+
+	@Test
+	void instantiatesOneDimensionalArrayCorrectly() {
+
+		doReturn(String[].class).when(entity).getType();
+		Object result = INSTANCE.createInstance(entity, provider);
+		assertThat(result.getClass()).isEqualTo(String[].class);
+	}
+
+	@Test
+	void instantiatesPrimitiveArrayCorrectly() {
+
+		doReturn(int[].class).when(entity).getType();
+		Object result = INSTANCE.createInstance(entity, provider);
+		assertThat(result.getClass()).isEqualTo(int[].class);
+	}
+
+	@Test
+	void instantiatesThreeDimensionalArrayCorrectly() {
+
+		doReturn(int[][][].class).when(entity).getType();
+		Object result = INSTANCE.createInstance(entity, provider);
+		assertThat(result.getClass()).isEqualTo(int[][][].class);
 	}
 
 	@Test // DATACMNS-1126
