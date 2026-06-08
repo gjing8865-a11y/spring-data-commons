@@ -148,6 +148,50 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "merged"), parameter, reference);
 	}
 
+	@Test
+	void discoversOffsetFromRequestWithPrefix() {
+
+		sut.setPrefix("p_");
+		var reference = ScrollPosition.offset(5);
+
+		var request = MockServerHttpRequest.get("/foo?p_offset=5").build();
+		assertSupportedAndResolvedTo(request, PARAMETER, reference);
+	}
+
+	@Test
+	void discoversQualifiedOffsetFromRequestWithPrefix() {
+
+		sut.setPrefix("p_");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		var request = MockServerHttpRequest.get("/foo?p_hello_offset=5").build();
+		assertSupportedAndResolvedTo(request, parameter, reference);
+	}
+
+	@Test
+	void discoversOffsetFromRequestWithCustomParameterAndPrefix() {
+
+		sut.setPrefix("p_");
+		sut.setOffsetParameter("cursor");
+		var reference = ScrollPosition.offset(5);
+
+		var request = MockServerHttpRequest.get("/foo?p_cursor=5").build();
+		assertSupportedAndResolvedTo(request, PARAMETER, reference);
+	}
+
+	@Test
+	void discoversOffsetFromRequestWithCustomQualifierDelimiterAndPrefix() {
+
+		sut.setPrefix("p_");
+		sut.setQualifierDelimiter(".");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		var request = MockServerHttpRequest.get("/foo?p_hello.offset=5").build();
+		assertSupportedAndResolvedTo(request, parameter, reference);
+	}
+
 	@Nullable
 	private static Object resolveOffset(MockServerHttpRequest request, MethodParameter parameter) {
 

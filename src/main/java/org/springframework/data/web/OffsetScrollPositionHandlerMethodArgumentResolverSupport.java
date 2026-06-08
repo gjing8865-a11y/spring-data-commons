@@ -41,10 +41,14 @@ public abstract class OffsetScrollPositionHandlerMethodArgumentResolverSupport {
 	private static final String DEFAULT_PARAMETER = "offset";
 
 	private static final String DEFAULT_QUALIFIER_DELIMITER = "_";
+	
+	private static final String DEFAULT_PREFIX = "";
 
 	private String offsetParameter = DEFAULT_PARAMETER;
 
 	private String qualifierDelimiter = DEFAULT_QUALIFIER_DELIMITER;
+	
+	private String prefix = DEFAULT_PREFIX;
 
 	/**
 	 * Configure the request parameter to lookup offset information from. Defaults to {@code offset}.
@@ -68,6 +72,16 @@ public abstract class OffsetScrollPositionHandlerMethodArgumentResolverSupport {
 	}
 
 	/**
+	 * Configures a general prefix to be prepended to the offset parameter. Useful to namespace the
+	 * property names used in case they are clashing with ones used by your application. By default, no prefix is used.
+	 *
+	 * @param prefix the prefix to be used or {@literal null} to reset to the default.
+	 */
+	public void setPrefix(@Nullable String prefix) {
+		this.prefix = prefix == null ? DEFAULT_PREFIX : prefix;
+	}
+
+	/**
 	 * Returns the offset parameter to be looked up from the request. Potentially applies qualifiers to it.
 	 *
 	 * @param parameter can be {@literal null}.
@@ -75,7 +89,7 @@ public abstract class OffsetScrollPositionHandlerMethodArgumentResolverSupport {
 	 */
 	protected String getOffsetParameter(MethodParameter parameter) {
 
-		StringBuilder builder = new StringBuilder();
+		StringBuilder builder = new StringBuilder(prefix);
 
 		String value = SpringDataAnnotationUtils.getQualifier(parameter);
 

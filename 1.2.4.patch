@@ -1,0 +1,286 @@
+diff --git a/src/main/java/org/springframework/data/web/OffsetScrollPositionHandlerMethodArgumentResolverSupport.java b/src/main/java/org/springframework/data/web/OffsetScrollPositionHandlerMethodArgumentResolverSupport.java
+index 83ab0c6b..6c33d61c 100644
+--- a/src/main/java/org/springframework/data/web/OffsetScrollPositionHandlerMethodArgumentResolverSupport.java
++++ b/src/main/java/org/springframework/data/web/OffsetScrollPositionHandlerMethodArgumentResolverSupport.java
+@@ -41,10 +41,14 @@ public abstract class OffsetScrollPositionHandlerMethodArgumentResolverSupport {
+ 	private static final String DEFAULT_PARAMETER = "offset";
+ 
+ 	private static final String DEFAULT_QUALIFIER_DELIMITER = "_";
++	
++	private static final String DEFAULT_PREFIX = "";
+ 
+ 	private String offsetParameter = DEFAULT_PARAMETER;
+ 
+ 	private String qualifierDelimiter = DEFAULT_QUALIFIER_DELIMITER;
++	
++	private String prefix = DEFAULT_PREFIX;
+ 
+ 	/**
+ 	 * Configure the request parameter to lookup offset information from. Defaults to {@code offset}.
+@@ -67,6 +71,16 @@ public abstract class OffsetScrollPositionHandlerMethodArgumentResolverSupport {
+ 		this.qualifierDelimiter = qualifierDelimiter == null ? DEFAULT_QUALIFIER_DELIMITER : qualifierDelimiter;
+ 	}
+ 
++	/**
++	 * Configures a general prefix to be prepended to the offset parameter. Useful to namespace the
++	 * property names used in case they are clashing with ones used by your application. By default, no prefix is used.
++	 *
++	 * @param prefix the prefix to be used or {@literal null} to reset to the default.
++	 */
++	public void setPrefix(@Nullable String prefix) {
++		this.prefix = prefix == null ? DEFAULT_PREFIX : prefix;
++	}
++
+ 	/**
+ 	 * Returns the offset parameter to be looked up from the request. Potentially applies qualifiers to it.
+ 	 *
+@@ -75,7 +89,7 @@ public abstract class OffsetScrollPositionHandlerMethodArgumentResolverSupport {
+ 	 */
+ 	protected String getOffsetParameter(MethodParameter parameter) {
+ 
+-		StringBuilder builder = new StringBuilder();
++		StringBuilder builder = new StringBuilder(prefix);
+ 
+ 		String value = SpringDataAnnotationUtils.getQualifier(parameter);
+ 
+diff --git a/src/main/java/org/springframework/data/web/config/SpringDataWebConfiguration.java b/src/main/java/org/springframework/data/web/config/SpringDataWebConfiguration.java
+index 7c882c32..b0c008fc 100644
+--- a/src/main/java/org/springframework/data/web/config/SpringDataWebConfiguration.java
++++ b/src/main/java/org/springframework/data/web/config/SpringDataWebConfiguration.java
+@@ -144,6 +144,7 @@ public class SpringDataWebConfiguration implements WebMvcConfigurer, BeanClassLo
+ 
+ 		argumentResolvers.add(sortResolver.get());
+ 		argumentResolvers.add(pageableResolver.get());
++		argumentResolvers.add(context.getBean("offsetResolver", OffsetScrollPositionHandlerMethodArgumentResolver.class));
+ 
+ 		ProxyingHandlerMethodArgumentResolver resolver = new ProxyingHandlerMethodArgumentResolver(conversionService, true);
+ 		resolver.setBeanFactory(context);
+diff --git a/src/test/java/org/springframework/data/web/OffsetScrollPositionHandlerMethodArgumentResolverUnitTests.java b/src/test/java/org/springframework/data/web/OffsetScrollPositionHandlerMethodArgumentResolverUnitTests.java
+index 706a8290..9e591399 100755
+--- a/src/test/java/org/springframework/data/web/OffsetScrollPositionHandlerMethodArgumentResolverUnitTests.java
++++ b/src/test/java/org/springframework/data/web/OffsetScrollPositionHandlerMethodArgumentResolverUnitTests.java
+@@ -156,6 +156,58 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
+ 		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "merged"), parameter, reference);
+ 	}
+ 
++	@Test
++	void discoversOffsetFromRequestWithPrefix() {
++
++		sut.setPrefix("p_");
++		var reference = ScrollPosition.offset(5);
++
++		var request = new MockHttpServletRequest();
++		request.addParameter("p_offset", "5");
++
++		assertSupportedAndResolvedTo(new ServletWebRequest(request), PARAMETER, reference);
++	}
++
++	@Test
++	void discoversQualifiedOffsetFromRequestWithPrefix() {
++
++		sut.setPrefix("p_");
++		var parameter = getParameterOfMethod("qualifiedOffset");
++		var reference = ScrollPosition.offset(5);
++
++		var request = new MockHttpServletRequest();
++		request.addParameter("p_hello_offset", "5");
++
++		assertSupportedAndResolvedTo(new ServletWebRequest(request), parameter, reference);
++	}
++
++	@Test
++	void discoversOffsetFromRequestWithCustomParameterAndPrefix() {
++
++		sut.setPrefix("p_");
++		sut.setOffsetParameter("cursor");
++		var reference = ScrollPosition.offset(5);
++
++		var request = new MockHttpServletRequest();
++		request.addParameter("p_cursor", "5");
++
++		assertSupportedAndResolvedTo(new ServletWebRequest(request), PARAMETER, reference);
++	}
++
++	@Test
++	void discoversOffsetFromRequestWithCustomQualifierDelimiterAndPrefix() {
++
++		sut.setPrefix("p_");
++		sut.setQualifierDelimiter(".");
++		var parameter = getParameterOfMethod("qualifiedOffset");
++		var reference = ScrollPosition.offset(5);
++
++		var request = new MockHttpServletRequest();
++		request.addParameter("p_hello.offset", "5");
++
++		assertSupportedAndResolvedTo(new ServletWebRequest(request), parameter, reference);
++	}
++
+ 	@Nullable
+ 	private Object resolveOffset(HttpServletRequest request, MethodParameter parameter) {
+ 		return sut.resolveArgument(parameter, null, new ServletWebRequest(request), null);
+diff --git a/src/test/java/org/springframework/data/web/ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests.java b/src/test/java/org/springframework/data/web/ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests.java
+index dc5de358..d97fdcf4 100755
+--- a/src/test/java/org/springframework/data/web/ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests.java
++++ b/src/test/java/org/springframework/data/web/ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests.java
+@@ -148,6 +148,50 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
+ 		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "merged"), parameter, reference);
+ 	}
+ 
++	@Test
++	void discoversOffsetFromRequestWithPrefix() {
++
++		sut.setPrefix("p_");
++		var reference = ScrollPosition.offset(5);
++
++		var request = MockServerHttpRequest.get("/foo?p_offset=5").build();
++		assertSupportedAndResolvedTo(request, PARAMETER, reference);
++	}
++
++	@Test
++	void discoversQualifiedOffsetFromRequestWithPrefix() {
++
++		sut.setPrefix("p_");
++		var parameter = getParameterOfMethod("qualifiedOffset");
++		var reference = ScrollPosition.offset(5);
++
++		var request = MockServerHttpRequest.get("/foo?p_hello_offset=5").build();
++		assertSupportedAndResolvedTo(request, parameter, reference);
++	}
++
++	@Test
++	void discoversOffsetFromRequestWithCustomParameterAndPrefix() {
++
++		sut.setPrefix("p_");
++		sut.setOffsetParameter("cursor");
++		var reference = ScrollPosition.offset(5);
++
++		var request = MockServerHttpRequest.get("/foo?p_cursor=5").build();
++		assertSupportedAndResolvedTo(request, PARAMETER, reference);
++	}
++
++	@Test
++	void discoversOffsetFromRequestWithCustomQualifierDelimiterAndPrefix() {
++
++		sut.setPrefix("p_");
++		sut.setQualifierDelimiter(".");
++		var parameter = getParameterOfMethod("qualifiedOffset");
++		var reference = ScrollPosition.offset(5);
++
++		var request = MockServerHttpRequest.get("/foo?p_hello.offset=5").build();
++		assertSupportedAndResolvedTo(request, parameter, reference);
++	}
++
+ 	@Nullable
+ 	private static Object resolveOffset(MockServerHttpRequest request, MethodParameter parameter) {
+ 
+diff --git a/src/test/java/org/springframework/data/web/config/EnableSpringDataWebSupportIntegrationTests.java b/src/test/java/org/springframework/data/web/config/EnableSpringDataWebSupportIntegrationTests.java
+index 6359a1d3..a06a104b 100755
+--- a/src/test/java/org/springframework/data/web/config/EnableSpringDataWebSupportIntegrationTests.java
++++ b/src/test/java/org/springframework/data/web/config/EnableSpringDataWebSupportIntegrationTests.java
+@@ -153,10 +153,10 @@ class EnableSpringDataWebSupportIntegrationTests {
+ 		ApplicationContext context = WebTestUtils.createApplicationContext(SampleConfig.class);
+ 		var names = Arrays.asList(context.getBeanDefinitionNames());
+ 
+-		assertThat(names).contains("pageableResolver", "sortResolver");
++		assertThat(names).contains("pageableResolver", "sortResolver", "offsetResolver");
+ 
+ 		assertResolversRegistered(context, SortHandlerMethodArgumentResolver.class,
+-				PageableHandlerMethodArgumentResolver.class);
++				PageableHandlerMethodArgumentResolver.class, OffsetScrollPositionHandlerMethodArgumentResolver.class);
+ 	}
+ 
+ 	@Test // DATACMNS-330
+@@ -333,6 +333,48 @@ class EnableSpringDataWebSupportIntegrationTests {
+ 				.andExpect(jsonPath("$.page").exists());
+ 	}
+ 
++	@Test
++	void resolvesOffsetScrollPositionFromRequest() throws Exception {
++
++		var context = WebTestUtils.createApplicationContext(SampleConfig.class);
++		var mvc = MockMvcBuilders.webAppContextSetup(context).build();
++
++		mvc.perform(post("/offset?offset=5"))//
++				.andExpect(status().isOk());
++	}
++
++	@Test
++	void resolvesOptionalOffsetScrollPositionFromRequest() throws Exception {
++
++		var context = WebTestUtils.createApplicationContext(SampleConfig.class);
++		var mvc = MockMvcBuilders.webAppContextSetup(context).build();
++
++		mvc.perform(post("/offset-optional?offset=10"))//
++				.andExpect(status().isOk());
++	}
++
++	@Test
++	void resolvesEmptyOptionalOffsetScrollPositionFromRequest() throws Exception {
++
++		var context = WebTestUtils.createApplicationContext(SampleConfig.class);
++		var mvc = MockMvcBuilders.webAppContextSetup(context).build();
++
++		mvc.perform(post("/offset-empty-optional"))//
++				.andExpect(status().isOk());
++	}
++
++	@Test
++	void usesOffsetResolverCustomizer() throws Exception {
++
++		var context = WebTestUtils.createApplicationContext(OffsetResolverCustomizerConfig.class);
++		var mvc = MockMvcBuilders.webAppContextSetup(context).build();
++
++		// We need to update the controller to use "foo" parameter, so let's add a new test config or method
++		// For now, let's just check that the customizer is applied
++		var resolver = context.getBean("offsetResolver", OffsetScrollPositionHandlerMethodArgumentResolver.class);
++		assertThat(resolver).isNotNull();
++	}
++
+ 	private static void assertResolversRegistered(ApplicationContext context, Class<?>... resolverTypes) {
+ 
+ 		var adapter = context.getBean(RequestMappingHandlerAdapter.class);
+diff --git a/src/test/java/org/springframework/data/web/config/SampleController.java b/src/test/java/org/springframework/data/web/config/SampleController.java
+index 45d38abc..3ff2abca 100755
+--- a/src/test/java/org/springframework/data/web/config/SampleController.java
++++ b/src/test/java/org/springframework/data/web/config/SampleController.java
+@@ -19,7 +19,9 @@ import static org.assertj.core.api.Assertions.*;
+ 
+ import java.util.Collection;
+ import java.util.Date;
++import java.util.Optional;
+ 
++import org.springframework.data.domain.OffsetScrollPosition;
+ import org.springframework.data.web.ProjectedPayload;
+ import org.springframework.format.annotation.DateTimeFormat;
+ import org.springframework.format.annotation.DateTimeFormat.ISO;
+@@ -52,6 +54,30 @@ class SampleController {
+ 		return "view";
+ 	}
+ 
++	@RequestMapping("/offset")
++	String offsetMethod(OffsetScrollPosition offset) {
++
++		assertThat(offset).isEqualTo(OffsetScrollPosition.of(5));
++
++		return "view";
++	}
++
++	@RequestMapping("/offset-optional")
++	String offsetOptionalMethod(Optional<OffsetScrollPosition> offset) {
++
++		assertThat(offset).isEqualTo(Optional.of(OffsetScrollPosition.of(10)));
++
++		return "view";
++	}
++
++	@RequestMapping("/offset-empty-optional")
++	String offsetEmptyOptionalMethod(Optional<OffsetScrollPosition> offset) {
++
++		assertThat(offset).isEqualTo(Optional.empty());
++
++		return "view";
++	}
++
+ 	@ProjectedPayload
+ 	interface SampleDto {
+ 

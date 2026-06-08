@@ -156,6 +156,58 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "merged"), parameter, reference);
 	}
 
+	@Test
+	void discoversOffsetFromRequestWithPrefix() {
+
+		sut.setPrefix("p_");
+		var reference = ScrollPosition.offset(5);
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_offset", "5");
+
+		assertSupportedAndResolvedTo(new ServletWebRequest(request), PARAMETER, reference);
+	}
+
+	@Test
+	void discoversQualifiedOffsetFromRequestWithPrefix() {
+
+		sut.setPrefix("p_");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_hello_offset", "5");
+
+		assertSupportedAndResolvedTo(new ServletWebRequest(request), parameter, reference);
+	}
+
+	@Test
+	void discoversOffsetFromRequestWithCustomParameterAndPrefix() {
+
+		sut.setPrefix("p_");
+		sut.setOffsetParameter("cursor");
+		var reference = ScrollPosition.offset(5);
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_cursor", "5");
+
+		assertSupportedAndResolvedTo(new ServletWebRequest(request), PARAMETER, reference);
+	}
+
+	@Test
+	void discoversOffsetFromRequestWithCustomQualifierDelimiterAndPrefix() {
+
+		sut.setPrefix("p_");
+		sut.setQualifierDelimiter(".");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_hello.offset", "5");
+
+		assertSupportedAndResolvedTo(new ServletWebRequest(request), parameter, reference);
+	}
+
 	@Nullable
 	private Object resolveOffset(HttpServletRequest request, MethodParameter parameter) {
 		return sut.resolveArgument(parameter, null, new ServletWebRequest(request), null);

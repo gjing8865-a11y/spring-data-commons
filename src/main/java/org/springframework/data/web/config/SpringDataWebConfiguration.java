@@ -144,6 +144,7 @@ public class SpringDataWebConfiguration implements WebMvcConfigurer, BeanClassLo
 
 		argumentResolvers.add(sortResolver.get());
 		argumentResolvers.add(pageableResolver.get());
+		argumentResolvers.add(context.getBean("offsetResolver", OffsetScrollPositionHandlerMethodArgumentResolver.class));
 
 		ProxyingHandlerMethodArgumentResolver resolver = new ProxyingHandlerMethodArgumentResolver(conversionService, true);
 		resolver.setBeanFactory(context);
