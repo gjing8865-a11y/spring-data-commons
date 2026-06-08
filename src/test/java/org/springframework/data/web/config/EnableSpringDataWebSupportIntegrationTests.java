@@ -107,7 +107,10 @@ class EnableSpringDataWebSupportIntegrationTests {
 
 		@Bean
 		OffsetScrollPositionHandlerMethodArgumentResolverCustomizer testOffsetResolverCustomizer() {
-			return offsetResolver -> offsetResolver.setOffsetParameter("foo");
+			return offsetResolver -> {
+				offsetResolver.setPrefix("p_");
+				offsetResolver.setOffsetParameter("foo");
+			};
 		}
 	}
 
@@ -272,6 +275,35 @@ class EnableSpringDataWebSupportIntegrationTests {
 
 		assertThat(names).contains("testOffsetResolverCustomizer");
 		assertThat((String) ReflectionTestUtils.getField(resolver, "offsetParameter")).isEqualTo("foo");
+	}
+
+	@Test // GH-2856
+	void resolvesOffsetScrollPositionFromRequest() throws Exception {
+
+		var applicationContext = WebTestUtils.createApplicationContext(SampleConfig.class);
+		var mvc = MockMvcBuilders.webAppContextSetup(applicationContext).build();
+
+		mvc.perform(post("/offset?offset=5")).andExpect(status().isOk());
+		mvc.perform(post("/offset/missing")).andExpect(status().isOk());
+	}
+
+	@Test
+	void resolvesOptionalOffsetScrollPositionFromRequest() throws Exception {
+
+		var applicationContext = WebTestUtils.createApplicationContext(SampleConfig.class);
+		var mvc = MockMvcBuilders.webAppContextSetup(applicationContext).build();
+
+		mvc.perform(post("/offset/optional?offset=5")).andExpect(status().isOk());
+		mvc.perform(post("/offset/optional/missing")).andExpect(status().isOk());
+	}
+
+	@Test
+	void picksUpOffsetResolverCustomizerAndResolvesQualified() throws Exception {
+
+		var applicationContext = WebTestUtils.createApplicationContext(OffsetResolverCustomizerConfig.class);
+		var mvc = MockMvcBuilders.webAppContextSetup(applicationContext).build();
+
+		mvc.perform(post("/offset/qualified?p_hello_foo=5")).andExpect(status().isOk());
 	}
 
 	@Test // DATACMNS-1237

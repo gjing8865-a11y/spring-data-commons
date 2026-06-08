@@ -19,7 +19,10 @@ import static org.assertj.core.api.Assertions.*;
 
 import java.util.Collection;
 import java.util.Date;
+import java.util.Optional;
 
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.data.domain.OffsetScrollPosition;
 import org.springframework.data.web.ProjectedPayload;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.format.annotation.DateTimeFormat.ISO;
@@ -50,6 +53,51 @@ class SampleController {
 		assertThat(sampleDto.getBillingAddress().getCity()).isEqualTo("City");
 
 		return "view";
+	}
+
+	@RequestMapping("/offset")
+	@org.springframework.web.bind.annotation.ResponseBody
+	String offsetMethod(@org.jspecify.annotations.Nullable OffsetScrollPosition offset) {
+		if (offset == null) {
+			throw new IllegalArgumentException("offset is null");
+		}
+		return "ok";
+	}
+
+	@RequestMapping("/offset/missing")
+	@org.springframework.web.bind.annotation.ResponseBody
+	String missingOffsetMethod(@org.jspecify.annotations.Nullable OffsetScrollPosition offset) {
+		if (offset != null) {
+			throw new IllegalArgumentException("offset is not null");
+		}
+		return "ok";
+	}
+
+	@RequestMapping("/offset/optional")
+	@org.springframework.web.bind.annotation.ResponseBody
+	String optionalOffsetMethod(Optional<OffsetScrollPosition> offset) {
+		if (!offset.isPresent()) {
+			throw new IllegalArgumentException("offset is not present");
+		}
+		return "ok";
+	}
+
+	@RequestMapping("/offset/optional/missing")
+	@org.springframework.web.bind.annotation.ResponseBody
+	String missingOptionalOffsetMethod(Optional<OffsetScrollPosition> offset) {
+		if (offset.isPresent()) {
+			throw new IllegalArgumentException("offset is present");
+		}
+		return "ok";
+	}
+
+	@RequestMapping("/offset/qualified")
+	@org.springframework.web.bind.annotation.ResponseBody
+	String qualifiedOffsetMethod(@org.jspecify.annotations.Nullable @Qualifier("hello") OffsetScrollPosition offset) {
+		if (offset == null) {
+			throw new IllegalArgumentException("offset is null");
+		}
+		return "ok";
 	}
 
 	@ProjectedPayload

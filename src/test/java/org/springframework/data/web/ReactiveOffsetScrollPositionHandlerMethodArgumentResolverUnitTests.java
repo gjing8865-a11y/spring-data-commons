@@ -148,11 +148,70 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "merged"), parameter, reference);
 	}
 
-	@Nullable
-	private static Object resolveOffset(MockServerHttpRequest request, MethodParameter parameter) {
+	@Test
+	void usesPrefixIfConfigured() {
 
-		var resolver = new ReactiveOffsetScrollPositionHandlerMethodArgumentResolver();
-		return resolver.resolveArgumentValue(parameter, null, MockServerWebExchange.from(request));
+		sut.setPrefix("p_");
+		var reference = ScrollPosition.offset(5);
+
+		var request = MockServerHttpRequest.get("/foo?p_offset=5").build();
+
+		assertSupportedAndResolvedTo(request, PARAMETER, reference);
+	}
+
+	@Test
+	void usesPrefixAndQualifierIfConfigured() {
+
+		sut.setPrefix("p_");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		var request = MockServerHttpRequest.get("/foo?p_hello_offset=5").build();
+
+		assertSupportedAndResolvedTo(request, parameter, reference);
+	}
+
+	@Test
+	void usesCustomOffsetParameter() {
+
+		sut.setOffsetParameter("cursor");
+		var reference = ScrollPosition.offset(5);
+
+		var request = MockServerHttpRequest.get("/foo?cursor=5").build();
+
+		assertSupportedAndResolvedTo(request, PARAMETER, reference);
+	}
+
+	@Test
+	void usesCustomQualifierDelimiter() {
+
+		sut.setQualifierDelimiter(".");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		var request = MockServerHttpRequest.get("/foo?hello.offset=5").build();
+
+		assertSupportedAndResolvedTo(request, parameter, reference);
+	}
+
+	@Test
+	void usesPrefixQualifierAndCustomDelimiterAndOffsetParameter() {
+
+		sut.setPrefix("p_");
+		sut.setQualifierDelimiter(".");
+		sut.setOffsetParameter("cursor");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		var request = MockServerHttpRequest.get("/foo?p_hello.cursor=5").build();
+
+		assertSupportedAndResolvedTo(request, parameter, reference);
+	}
+
+	@Nullable
+	private Object resolveOffset(MockServerHttpRequest request, MethodParameter parameter) {
+
+		return sut.resolveArgumentValue(parameter, null, MockServerWebExchange.from(request));
 	}
 
 	private void assertSupportedAndResolvedTo(MockServerHttpRequest request, MethodParameter parameter,

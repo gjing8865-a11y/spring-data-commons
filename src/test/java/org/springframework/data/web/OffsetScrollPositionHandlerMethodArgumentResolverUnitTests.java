@@ -156,6 +156,71 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "merged"), parameter, reference);
 	}
 
+	@Test
+	void usesPrefixIfConfigured() {
+
+		sut.setPrefix("p_");
+		var reference = ScrollPosition.offset(5);
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_offset", "5");
+
+		assertSupportedAndResolvedTo(new ServletWebRequest(request), PARAMETER, reference);
+	}
+
+	@Test
+	void usesPrefixAndQualifierIfConfigured() {
+
+		sut.setPrefix("p_");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_hello_offset", "5");
+
+		assertSupportedAndResolvedTo(new ServletWebRequest(request), parameter, reference);
+	}
+
+	@Test
+	void usesCustomOffsetParameter() {
+
+		sut.setOffsetParameter("cursor");
+		var reference = ScrollPosition.offset(5);
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("cursor", "5");
+
+		assertSupportedAndResolvedTo(new ServletWebRequest(request), PARAMETER, reference);
+	}
+
+	@Test
+	void usesCustomQualifierDelimiter() {
+
+		sut.setQualifierDelimiter(".");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("hello.offset", "5");
+
+		assertSupportedAndResolvedTo(new ServletWebRequest(request), parameter, reference);
+	}
+
+	@Test
+	void usesPrefixQualifierAndCustomDelimiterAndOffsetParameter() {
+
+		sut.setPrefix("p_");
+		sut.setQualifierDelimiter(".");
+		sut.setOffsetParameter("cursor");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_hello.cursor", "5");
+
+		assertSupportedAndResolvedTo(new ServletWebRequest(request), parameter, reference);
+	}
+
 	@Nullable
 	private Object resolveOffset(HttpServletRequest request, MethodParameter parameter) {
 		return sut.resolveArgument(parameter, null, new ServletWebRequest(request), null);
