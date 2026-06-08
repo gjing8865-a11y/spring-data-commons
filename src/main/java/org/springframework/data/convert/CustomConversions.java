@@ -120,13 +120,8 @@ public class CustomConversions {
 
 		this.converterConfiguration = converterConfiguration;
 
-		List<Object> registeredConverters = collectPotentialConverterRegistrations(
-				converterConfiguration.getStoreConversions(), converterConfiguration.getUserConverters()).stream()
-				.filter(this::isSupportedConverter).filter(this::shouldRegister)
-				.map(ConverterRegistrationIntent::getConverterRegistration).map(this::register).distinct()
-				.collect(Collectors.toCollection(ArrayList::new));
-
-		Collections.reverse(registeredConverters);
+		List<Object> registeredConverters = registerConverters(
+				converterConfiguration.getStoreConversions(), converterConfiguration.getUserConverters());
 
 		this.converters = Collections.unmodifiableList(registeredConverters);
 		this.simpleTypeHolder = new SimpleTypeHolder(customSimpleTypes,
@@ -145,6 +140,22 @@ public class CustomConversions {
 	 */
 	public CustomConversions(StoreConversions storeConversions, Collection<?> converters) {
 		this(new ConverterConfiguration(storeConversions, new ArrayList<>(converters)));
+	}
+
+	private List<Object> registerConverters(StoreConversions storeConversions, Collection<?> userConverters) {
+
+		List<Object> registered = collectPotentialConverterRegistrations(storeConversions, userConverters)
+				.stream()
+				.filter(this::isSupportedConverter)
+				.filter(this::shouldRegister)
+				.map(ConverterRegistrationIntent::getConverterRegistration)
+				.map(this::register)
+				.distinct()
+				.collect(Collectors.toCollection(ArrayList::new));
+
+		Collections.reverse(registered);
+
+		return registered;
 	}
 
 	private static boolean hasAssignableSourceType(ConvertiblePair pair, Class<?> sourceType) {
@@ -290,21 +301,43 @@ public class CustomConversions {
 	 * @since 2.3
 	 */
 	private List<ConverterRegistrationIntent> collectPotentialConverterRegistrations(StoreConversions storeConversions,
-			Collection<?> converters) {
+			Collection<?> userConverters) {
 
-		List<ConverterRegistrationIntent> converterRegistrations = new ArrayList<>();
+		List<ConverterRegistrationIntent> registrations = new ArrayList<>();
 
-		converters.stream().map(storeConversions::getRegistrationsFor).flatMap(Streamable::stream)
-				.map(ConverterRegistrationIntent::userConverters).forEach(converterRegistrations::add);
+		registrations.addAll(collectUserConverterRegistrations(storeConversions, userConverters));
+		registrations.addAll(collectStoreConverterRegistrations(storeConversions));
+		registrations.addAll(collectDefaultConverterRegistrations(storeConversions));
 
-		storeConversions.getStoreConverters().stream().map(storeConversions::getRegistrationsFor)
-				.flatMap(Streamable::stream).map(ConverterRegistrationIntent::storeConverters)
-				.forEach(converterRegistrations::add);
+		return registrations;
+	}
 
-		DEFAULT_CONVERTERS.stream().map(storeConversions::getRegistrationsFor).flatMap(Streamable::stream)
-				.map(ConverterRegistrationIntent::defaultConverters).forEach(converterRegistrations::add);
+	private List<ConverterRegistrationIntent> collectUserConverterRegistrations(StoreConversions storeConversions,
+			Collection<?> userConverters) {
 
-		return converterRegistrations;
+		return userConverters.stream()
+				.map(storeConversions::getRegistrationsFor)
+				.flatMap(Streamable::stream)
+				.map(ConverterRegistrationIntent::userConverters)
+				.collect(Collectors.toList());
+	}
+
+	private List<ConverterRegistrationIntent> collectStoreConverterRegistrations(StoreConversions storeConversions) {
+
+		return storeConversions.getStoreConverters().stream()
+				.map(storeConversions::getRegistrationsFor)
+				.flatMap(Streamable::stream)
+				.map(ConverterRegistrationIntent::storeConverters)
+				.collect(Collectors.toList());
+	}
+
+	private List<ConverterRegistrationIntent> collectDefaultConverterRegistrations(StoreConversions storeConversions) {
+
+		return DEFAULT_CONVERTERS.stream()
+				.map(storeConversions::getRegistrationsFor)
+				.flatMap(Streamable::stream)
+				.map(ConverterRegistrationIntent::defaultConverters)
+				.collect(Collectors.toList());
 	}
 
 	/**
@@ -356,8 +389,7 @@ public class CustomConversions {
 	private boolean isSupportedConverter(ConverterRegistrationIntent registrationIntent) {
 
 		boolean register = registrationIntent.isUserConverter() || registrationIntent.isStoreConverter()
-				|| (registrationIntent.isReading() && registrationIntent.isSimpleSourceType())
-				|| (registrationIntent.isWriting() && registrationIntent.isSimpleTargetType());
+				|| hasSupportedStoreTypeSide(registrationIntent);
 
 		if (logger.isDebugEnabled()) {
 
@@ -373,6 +405,11 @@ public class CustomConversions {
 		}
 
 		return register;
+	}
+
+	private boolean hasSupportedStoreTypeSide(ConverterRegistrationIntent registrationIntent) {
+		return (registrationIntent.isReading() && registrationIntent.isSimpleSourceType())
+				|| (registrationIntent.isWriting() && registrationIntent.isSimpleTargetType());
 	}
 
 	/**
@@ -520,50 +557,31 @@ public class CustomConversions {
 	 */
 	static class ConversionTargetsCache {
 
-		private volatile Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>();
+		private volatile Map<Class<?>, TargetTypes> sourceTypeCache = new HashMap<>();
 
-		/**
-		 * Get or compute a target type given its {@code sourceType}. Returns a cached {@link Optional} if the value
-		 * (present/absent target) was computed once. Otherwise, uses a {@link Function mappingFunction} to determine a
-		 * possibly existing target type.
-		 *
-		 * @param sourceType must not be {@literal null}.
-		 * @param mappingFunction must not be {@literal null}.
-		 * @return the optional target type.
-		 */
 		public @Nullable Class<?> computeIfAbsent(Class<?> sourceType,
 				Function<ConvertiblePair, Class<?>> mappingFunction) {
 			return computeIfAbsent(sourceType, AbsentTargetTypeMarker.class, mappingFunction);
 		}
 
-		/**
-		 * Get or compute a target type given its {@code sourceType} and {@code targetType}. Returns a cached
-		 * {@link Optional} if the value (present/absent target) was computed once. Otherwise, uses a {@link Function
-		 * mappingFunction} to determine a possibly existing target type.
-		 *
-		 * @param sourceType must not be {@literal null}.
-		 * @param targetType must not be {@literal null}.
-		 * @param mappingFunction must not be {@literal null}.
-		 * @return the optional target type.
-		 */
 		public @Nullable Class<?> computeIfAbsent(Class<?> sourceType, Class<?> targetType,
 				Function<ConvertiblePair, Class<?>> mappingFunction) {
 
-			TargetTypes targetTypes = customReadTargetTypes.get(sourceType);
+			TargetTypes targetTypes = sourceTypeCache.get(sourceType);
 
 			if (targetTypes == null) {
 
 				synchronized (this) {
 
-					TargetTypes customReadTarget = customReadTargetTypes.get(sourceType);
-					if (customReadTarget != null) {
-						targetTypes = customReadTarget;
+					TargetTypes existing = sourceTypeCache.get(sourceType);
+					if (existing != null) {
+						targetTypes = existing;
 					} else {
 
-						Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>(this.customReadTargetTypes);
+						Map<Class<?>, TargetTypes> newCache = new HashMap<>(this.sourceTypeCache);
 						targetTypes = new TargetTypes(sourceType);
-						customReadTargetTypes.put(sourceType, targetTypes);
-						this.customReadTargetTypes = customReadTargetTypes;
+						newCache.put(sourceType, targetTypes);
+						this.sourceTypeCache = newCache;
 					}
 				}
 			}
@@ -571,9 +589,6 @@ public class CustomConversions {
 			return targetTypes.computeIfAbsent(targetType, mappingFunction);
 		}
 
-		/**
-		 * Marker type for absent target type caching.
-		 */
 		interface AbsentTargetTypeMarker {}
 	}
 
@@ -584,45 +599,38 @@ public class CustomConversions {
 	 */
 	static class TargetTypes {
 
+		private static final Class<?> ABSENT_TARGET_SENTINEL = Void.class;
+
 		private final Class<?> sourceType;
-		private volatile Map<Class<?>, Class<?>> conversionTargets = new HashMap<>();
+		private volatile Map<Class<?>, Class<?>> targetTypeCache = new HashMap<>();
 
 		TargetTypes(Class<?> sourceType) {
 			this.sourceType = sourceType;
 		}
 
-		/**
-		 * Get or compute a target type given its {@code targetType}. Returns a cached {@link Optional} if the value
-		 * (present/absent target) was computed once. Otherwise, uses a {@link Function mappingFunction} to determine a
-		 * possibly existing target type.
-		 *
-		 * @param targetType must not be {@literal null}.
-		 * @param mappingFunction must not be {@literal null}.
-		 * @return the optional target type.
-		 */
 		public @Nullable Class<?> computeIfAbsent(Class<?> targetType,
 				Function<ConvertiblePair, Class<?>> mappingFunction) {
 
-			Class<?> optionalTarget = conversionTargets.get(targetType);
+			Class<?> optionalTarget = targetTypeCache.get(targetType);
 
 			if (optionalTarget == null) {
 
 				synchronized (this) {
 
-					Class<?> conversionTarget = conversionTargets.get(targetType);
+					Class<?> conversionTarget = targetTypeCache.get(targetType);
 					if (conversionTarget != null) {
 						optionalTarget = conversionTarget;
 					} else {
 
 						optionalTarget = mappingFunction.apply(new ConvertiblePair(sourceType, targetType));
-						Map<Class<?>, Class<?>> conversionTargets = new HashMap<>(this.conversionTargets);
-						conversionTargets.put(targetType, optionalTarget == null ? Void.class : optionalTarget);
-						this.conversionTargets = conversionTargets;
+						Map<Class<?>, Class<?>> newCache = new HashMap<>(this.targetTypeCache);
+						newCache.put(targetType, optionalTarget == null ? ABSENT_TARGET_SENTINEL : optionalTarget);
+						this.targetTypeCache = newCache;
 					}
 				}
 			}
 
-			return Void.class.equals(optionalTarget) ? null : optionalTarget;
+			return ABSENT_TARGET_SENTINEL.equals(optionalTarget) ? null : optionalTarget;
 		}
 	}
 

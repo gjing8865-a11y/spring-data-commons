@@ -343,6 +343,89 @@ class CustomConversionsUnitTests {
 		verify(actualLoggerSpy, never()).warn(anyString(), any());
 	}
 
+	@Test
+	void absentWriteTargetCacheDoesNotPolluteOtherRequestedTargetQuery() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Arrays.asList(NumberToStringConverter.INSTANCE, StringToNumberConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
+
+		assertThat(conversions.getCustomWriteTarget(Long.class, String.class)).hasValue(String.class);
+
+		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
+	}
+
+	@Test
+	void writeTargetOverloadsHaveSeparateCache() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Arrays.asList(NumberToStringConverter.INSTANCE, StringToNumberConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
+
+		assertThat(conversions.getCustomWriteTarget(Long.class)).hasValue(String.class);
+
+		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
+	}
+
+	@Test
+	void storeConverterRegisteredByStoreSimpleTypeRules() {
+
+		var registry = mock(ConverterRegistry.class);
+
+		var holder = new SimpleTypeHolder(Collections.emptySet(), true);
+
+		var conversions = new CustomConversions(StoreConversions.of(holder, PointToMapConverter.INSTANCE),
+				Collections.emptyList());
+		conversions.registerConvertersIn(registry);
+
+		assertThat(conversions.isSimpleType(Point.class)).isTrue();
+		assertThat(conversions.hasCustomWriteTarget(Point.class)).isTrue();
+		verify(registry).addConverter(any(PointToMapConverter.class));
+	}
+
+	@Test
+	void defaultConverterSkippedByFilterButUserConverterNot() {
+
+		var registry = mock(ConverterRegistry.class);
+
+		Predicate<ConvertiblePair> filter = Predicate.<ConvertiblePair> isEqual(
+				new ConvertiblePair(java.time.LocalDateTime.class, Date.class)).negate();
+
+		var config = new ConverterConfiguration(StoreConversions.NONE,
+				Collections.singletonList(LocalDateTimeToDateConverter.INSTANCE), filter);
+
+		new CustomConversions(config).registerConvertersIn(registry);
+
+		verify(registry).addConverter(any(LocalDateTimeToDateConverter.class));
+	}
+
+	@Test
+	void cglibProxyTypeHitsCustomWriteTarget() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(FormatToStringConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(createProxyTypeFor(Format.class))).hasValue(String.class);
+	}
+
+	@Test
+	void cglibProxyTypeHitsCustomReadTarget() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(CustomTypeToStringConverter.INSTANCE));
+
+		assertThat(conversions.hasCustomReadTarget(createProxyTypeFor(CustomType.class), String.class)).isTrue();
+	}
+
+	@Test
+	void nullPropertyValueConversionsDoesNotCauseErrors() {
+
+		new CustomConversions(
+				new ConverterConfiguration(StoreConversions.NONE, Collections.emptyList(), (it) -> true, null));
+	}
+
 	private static Class<?> createProxyTypeFor(Class<?> type) {
 
 		var factory = new ProxyFactory();
