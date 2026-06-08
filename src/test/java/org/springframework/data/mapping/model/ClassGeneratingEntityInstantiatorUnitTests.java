@@ -71,8 +71,16 @@ class ClassGeneratingEntityInstantiatorUnitTests<P extends PersistentProperty<P>
 	void instantiatesArrayCorrectly() {
 
 		doReturn(String[][].class).when(entity).getType();
+		Object instance = this.instance.createInstance(entity, provider);
+		assertThat(instance.getClass()).isEqualTo(String[][].class);
 
-		this.instance.createInstance(entity, provider);
+		doReturn(String[].class).when(entity).getType();
+		Object instance2 = this.instance.createInstance(entity, provider);
+		assertThat(instance2.getClass()).isEqualTo(String[].class);
+
+		doReturn(int[].class).when(entity).getType();
+		Object instance3 = this.instance.createInstance(entity, provider);
+		assertThat(instance3.getClass()).isEqualTo(int[].class);
 	}
 
 	@Test // DATACMNS-1126

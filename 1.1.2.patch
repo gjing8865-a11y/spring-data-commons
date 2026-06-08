@@ -1,0 +1,57 @@
+diff --git a/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java b/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java
+index 9d4ec5fb..a0ab2107 100644
+--- a/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java
++++ b/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java
+@@ -131,7 +131,7 @@ enum ReflectionEntityInstantiator implements EntityInstantiator {
+ 					ctype = ctype.getComponentType();
+ 					dims++;
+ 				}
+-				return (T) Array.newInstance(clazz, dims);
++				return (T) Array.newInstance(ctype, new int[dims]);
+ 			} else {
+ 				return BeanUtils.instantiateClass(entity.getType());
+ 			}
+diff --git a/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java b/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java
+index 00bedb42..46ec2535 100755
+--- a/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java
++++ b/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java
+@@ -71,8 +71,16 @@ class ClassGeneratingEntityInstantiatorUnitTests<P extends PersistentProperty<P>
+ 	void instantiatesArrayCorrectly() {
+ 
+ 		doReturn(String[][].class).when(entity).getType();
++		Object instance = this.instance.createInstance(entity, provider);
++		assertThat(instance.getClass()).isEqualTo(String[][].class);
+ 
+-		this.instance.createInstance(entity, provider);
++		doReturn(String[].class).when(entity).getType();
++		Object instance2 = this.instance.createInstance(entity, provider);
++		assertThat(instance2.getClass()).isEqualTo(String[].class);
++
++		doReturn(int[].class).when(entity).getType();
++		Object instance3 = this.instance.createInstance(entity, provider);
++		assertThat(instance3.getClass()).isEqualTo(int[].class);
+ 	}
+ 
+ 	@Test // DATACMNS-1126
+diff --git a/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java b/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java
+index 16ca8ea5..2e29316c 100755
+--- a/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java
++++ b/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java
+@@ -60,7 +60,16 @@ class ReflectionEntityInstantiatorUnitTests<P extends PersistentProperty<P>> {
+ 	void instantiatesArrayCorrectly() {
+ 
+ 		doReturn(String[][].class).when(entity).getType();
+-		INSTANCE.createInstance(entity, provider);
++		Object instance = INSTANCE.createInstance(entity, provider);
++		assertThat(instance.getClass()).isEqualTo(String[][].class);
++
++		doReturn(String[].class).when(entity).getType();
++		Object instance2 = INSTANCE.createInstance(entity, provider);
++		assertThat(instance2.getClass()).isEqualTo(String[].class);
++
++		doReturn(int[].class).when(entity).getType();
++		Object instance3 = INSTANCE.createInstance(entity, provider);
++		assertThat(instance3.getClass()).isEqualTo(int[].class);
+ 	}
+ 
+ 	@Test // DATACMNS-1126
