@@ -469,6 +469,135 @@ class CustomConversionsUnitTests {
 
 	static class DateFormat extends Format {}
 
-	static class SimpleDateFormat extends DateFormat {}
+	static class SimpleDateFormat extends Format {}
 
+	// ===== Additional tests for refactored converter registration and cache semantics =====
+
+	@Test
+	void userConverterIsNotAffectedByDefaultConverterFilter() {
+
+		var registry = mock(ConverterRegistry.class);
+
+		var config = new ConverterConfiguration(StoreConversions.NONE,
+				Collections.singletonList(LocalDateTimeToDateConverter.INSTANCE),
+				Predicate.<ConvertiblePair> isEqual(new ConvertiblePair(java.time.LocalDateTime.class, Date.class)).negate());
+
+		new CustomConversions(config).registerConvertersIn(registry);
+
+		verify(registry).addConverter(any(LocalDateTimeToDateConverter.class));
+	}
+
+	@Test
+	void defaultConverterIsSkippedWhenFilterRejectsIt() {
+
+		var registry = mock(ConverterRegistry.class);
+
+		var holder = new SimpleTypeHolder(Collections.singleton(Date.class), true);
+
+		var config = new ConverterConfiguration(StoreConversions.of(holder), Collections.emptyList(),
+				Predicate.<ConvertiblePair> isEqual(new ConvertiblePair(java.time.LocalDateTime.class, Date.class)).negate());
+
+		new CustomConversions(config).registerConvertersIn(registry);
+
+		verify(registry, never()).addConverter(any(Jsr310Converters.LocalDateTimeToDateConverter.class));
+	}
+
+	@Test
+	void storeConverterRegistersAccordingToStoreSimpleTypeRules() {
+
+		var registry = mock(ConverterRegistry.class);
+
+		var holder = new SimpleTypeHolder(Collections.singleton(String.class), true);
+
+		var conversions = new CustomConversions(StoreConversions.of(holder, FormatToStringConverter.INSTANCE),
+				Collections.emptyList());
+		conversions.registerConvertersIn(registry);
+
+		assertThat(conversions.isSimpleType(Format.class)).isTrue();
+		verify(registry).addConverter(any(FormatToStringConverter.class));
+	}
+
+	@Test
+	void absentTargetCacheDoesNotPolluteRequestedTargetCache() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(FormatToStringConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(Format.class, Object.class)).isEmpty();
+
+		assertThat(conversions.getCustomWriteTarget(Format.class)).hasValue(String.class);
+
+		assertThat(conversions.getCustomWriteTarget(Format.class, Object.class)).isEmpty();
+	}
+
+	@Test
+	void absentTargetForOneRequestedTargetDoesNotAffectAnotherRequestedTarget() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(FormatToStringConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(Format.class, Number.class)).isEmpty();
+
+		assertThat(conversions.getCustomWriteTarget(Format.class, String.class)).hasValue(String.class);
+
+		assertThat(conversions.getCustomWriteTarget(Format.class, Number.class)).isEmpty();
+	}
+
+	@Test
+	void cglibProxyTypeHitsCustomWriteTarget() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(FormatToStringConverter.INSTANCE));
+
+		Class<?> proxyType = createProxyTypeFor(Format.class);
+
+		assertThat(conversions.getCustomWriteTarget(proxyType)).hasValue(String.class);
+	}
+
+	@Test
+	void cglibProxyTypeHitsCustomReadTarget() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(StringToFormatConverter.INSTANCE));
+
+		Class<?> proxyType = createProxyTypeFor(Format.class);
+
+		assertThat(conversions.hasCustomReadTarget(String.class, proxyType)).isTrue();
+	}
+
+	@Test
+	void nullPropertyValueConversionsDoesNotAffectBehavior() {
+
+		var conversions = new CustomConversions(
+				new ConverterConfiguration(StoreConversions.NONE, Collections.emptyList(), (it) -> true, null));
+
+		assertThat(conversions.getPropertyValueConversions()).isNull();
+		assertThat(conversions.getCustomWriteTarget(Format.class)).isEmpty();
+	}
+
+	@Test
+	void getCustomWriteTargetWithAndWithoutRequestedTargetDoNotPolluteEachOther() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(FormatToStringConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(Format.class, Object.class)).isEmpty();
+
+		assertThat(conversions.getCustomWriteTarget(Format.class)).hasValue(String.class);
+
+		assertThat(conversions.getCustomWriteTarget(Format.class, Object.class)).isEmpty();
+
+		assertThat(conversions.getCustomWriteTarget(Format.class, String.class)).hasValue(String.class);
+	}
+
+	@WritingConverter
+	enum NumberToStringConverter2 implements Converter<Number, String> {
+
+		INSTANCE;
+
+		@Override
+		public String convert(Number source) {
+			return source.toString();
+		}
+	}
 }

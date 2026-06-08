@@ -1,0 +1,548 @@
+diff --git a/src/main/java/org/springframework/data/convert/CustomConversions.java b/src/main/java/org/springframework/data/convert/CustomConversions.java
+index 713aa2e0..060db34b 100644
+--- a/src/main/java/org/springframework/data/convert/CustomConversions.java
++++ b/src/main/java/org/springframework/data/convert/CustomConversions.java
+@@ -281,7 +281,8 @@ public class CustomConversions {
+ 	}
+ 
+ 	/**
+-	 * Get all converters and add origin information
++	 * Phase 1: Collect all potential converter registrations from user, store, and default sources.
++	 * Each registration is tagged with its origin for downstream filtering decisions.
+ 	 *
+ 	 * @param storeConversions collection of store-base conversions; must not be {@literal null}.
+ 	 * @param converters collections of custom, user-based converters; must not be {@literal null}.
+@@ -292,90 +293,95 @@ public class CustomConversions {
+ 	private List<ConverterRegistrationIntent> collectPotentialConverterRegistrations(StoreConversions storeConversions,
+ 			Collection<?> converters) {
+ 
+-		List<ConverterRegistrationIntent> converterRegistrations = new ArrayList<>();
++		List<ConverterRegistrationIntent> result = new ArrayList<>();
+ 
+-		converters.stream().map(storeConversions::getRegistrationsFor).flatMap(Streamable::stream)
+-				.map(ConverterRegistrationIntent::userConverters).forEach(converterRegistrations::add);
++		collectUserConverters(storeConversions, converters, result);
++		collectStoreConverters(storeConversions, result);
++		collectDefaultConverters(storeConversions, result);
+ 
+-		storeConversions.getStoreConverters().stream().map(storeConversions::getRegistrationsFor)
+-				.flatMap(Streamable::stream).map(ConverterRegistrationIntent::storeConverters)
+-				.forEach(converterRegistrations::add);
++		return result;
++	}
+ 
+-		DEFAULT_CONVERTERS.stream().map(storeConversions::getRegistrationsFor).flatMap(Streamable::stream)
+-				.map(ConverterRegistrationIntent::defaultConverters).forEach(converterRegistrations::add);
++	private void collectUserConverters(StoreConversions storeConversions, Collection<?> converters,
++			List<ConverterRegistrationIntent> target) {
++		converters.stream()
++				.map(storeConversions::getRegistrationsFor)
++				.flatMap(Streamable::stream)
++				.map(ConverterRegistrationIntent::userConverters)
++				.forEach(target::add);
++	}
+ 
+-		return converterRegistrations;
++	private void collectStoreConverters(StoreConversions storeConversions,
++			List<ConverterRegistrationIntent> target) {
++		storeConversions.getStoreConverters().stream()
++				.map(storeConversions::getRegistrationsFor)
++				.flatMap(Streamable::stream)
++				.map(ConverterRegistrationIntent::storeConverters)
++				.forEach(target::add);
++	}
++
++	private void collectDefaultConverters(StoreConversions storeConversions,
++			List<ConverterRegistrationIntent> target) {
++		DEFAULT_CONVERTERS.stream()
++				.map(storeConversions::getRegistrationsFor)
++				.flatMap(Streamable::stream)
++				.map(ConverterRegistrationIntent::defaultConverters)
++				.forEach(target::add);
+ 	}
+ 
+ 	/**
+-	 * Registers the given {@link ConvertiblePair} as reading or writing pair depending on the type sides being basic
+-	 * types.
++	 * Phase 2: Determine whether a converter is structurally supported based on its origin
++	 * and the simple-type status of its source/target types.
++	 * <p>
++	 * User and store converters are always supported. Default converters must convert
++	 * to/from a store-supported simple type in the relevant direction.
+ 	 *
+-	 * @param converterRegistration {@link ConverterRegistration} to register; must not be {@literal null}.
+-	 * @see ConverterRegistration
++	 * @param intent {@link ConverterRegistrationIntent} to validate; must not be {@literal null}.
++	 * @return {@literal true} if supported.
++	 * @since 2.3
+ 	 */
+-	private Object register(ConverterRegistration converterRegistration) {
+-
+-		Assert.notNull(converterRegistration, "Converter registration must not be null");
+-
+-		ConvertiblePair pair = converterRegistration.getConvertiblePair();
+-
+-		if (converterRegistration.isReading()) {
+-
+-			readingPairs.add(pair);
+-
+-			if (logger.isWarnEnabled() && !converterRegistration.isSimpleSourceType()
+-					&& !Collection.class.isAssignableFrom(pair.getSourceType())) {
+-				logger.warn(String.format(READ_CONVERTER_NOT_SIMPLE, pair.getSourceType(), pair.getTargetType()));
+-			}
++	private boolean isSupportedConverter(ConverterRegistrationIntent intent) {
++		if (intent.isUserConverter() || intent.isStoreConverter()) {
++			logSupportedConverter(intent);
++			return true;
+ 		}
+ 
+-		if (converterRegistration.isWriting()) {
++		boolean supportedByReading = intent.isReading() && intent.isSimpleSourceType();
++		boolean supportedByWriting = intent.isWriting() && intent.isSimpleTargetType();
+ 
+-			writingPairs.add(pair);
+-			customSimpleTypes.add(pair.getSourceType());
+-
+-			if (logger.isWarnEnabled() && !converterRegistration.isSimpleTargetType()
+-					&& !Collection.class.isAssignableFrom(pair.getTargetType())) {
+-				logger.warn(String.format(WRITE_CONVERTER_NOT_SIMPLE, pair.getSourceType(), pair.getTargetType()));
+-			}
++		if (supportedByReading || supportedByWriting) {
++			logSupportedConverter(intent);
++		} else {
++			logSkippedConverter(intent);
+ 		}
+ 
+-		return converterRegistration.getConverter();
++		return supportedByReading || supportedByWriting;
+ 	}
+ 
+-	/**
+-	 * Validate a given {@link ConverterRegistration} in a specific setup.<br/>
+-	 * Non {@link ReadingConverter reading} and user defined {@link Converter converters} are only considered supported if
+-	 * the {@link ConverterRegistrationIntent#isSimpleTargetType() target type} is considered to be a store simple type.
+-	 *
+-	 * @param registrationIntent {@link ConverterRegistrationIntent} to validate; must not be {@literal null}.
+-	 * @return {@literal true} if supported.
+-	 * @since 2.3
+-	 */
+-	private boolean isSupportedConverter(ConverterRegistrationIntent registrationIntent) {
+-
+-		boolean register = registrationIntent.isUserConverter() || registrationIntent.isStoreConverter()
+-				|| (registrationIntent.isReading() && registrationIntent.isSimpleSourceType())
+-				|| (registrationIntent.isWriting() && registrationIntent.isSimpleTargetType());
+-
++	private void logSupportedConverter(ConverterRegistrationIntent intent) {
+ 		if (logger.isDebugEnabled()) {
+-
+-			if (register) {
+-				logger.debug(String.format(ADD_CONVERTER, registrationIntent.isUserConverter() ? "user defined " : "",
+-						registrationIntent.getSourceType(), registrationIntent.getTargetType(),
+-						registrationIntent.isReading() ? "reading" : "writing"));
+-			} else {
+-				logger.debug(String.format(SKIP_CONVERTER, registrationIntent.getSourceType(),
+-						registrationIntent.getTargetType(), registrationIntent.isReading() ? "reading" : "writing",
+-						registrationIntent.isReading() ? registrationIntent.getSourceType() : registrationIntent.getTargetType()));
+-			}
++			String prefix = intent.isUserConverter() ? "user defined " : "";
++			String direction = intent.isReading() ? "reading" : "writing";
++			logger.debug(String.format(ADD_CONVERTER, prefix,
++					intent.getSourceType(), intent.getTargetType(), direction));
+ 		}
++	}
+ 
+-		return register;
++	private void logSkippedConverter(ConverterRegistrationIntent intent) {
++		if (logger.isDebugEnabled()) {
++			String direction = intent.isReading() ? "reading" : "writing";
++			Class<?> simpleTypeCheck = intent.isReading()
++					? intent.getSourceType()
++					: intent.getTargetType();
++			logger.debug(String.format(SKIP_CONVERTER,
++					intent.getSourceType(), intent.getTargetType(), direction, simpleTypeCheck));
++		}
+ 	}
+ 
+ 	/**
++	 * Phase 3: Apply the user-configured registration filter.
++	 * Only default converters are subject to filtering; user and store converters always pass.
++	 *
+ 	 * @param intent must not be {@literal null}.
+ 	 * @return {@literal false} if the given {@link ConverterRegistration} shall be skipped.
+ 	 * @since 2.3
+@@ -385,6 +391,57 @@ public class CustomConversions {
+ 				|| converterConfiguration.shouldRegister(intent.getConverterRegistration().getConvertiblePair());
+ 	}
+ 
++	/**
++	 * Phase 4: Register a converter — populate direction-specific pair sets,
++	 * custom simple types, and emit warnings when applicable.
++	 *
++	 * @param converterRegistration {@link ConverterRegistration} to register; must not be {@literal null}.
++	 * @return the underlying converter object (for the final distinct/reverse pipeline).
++	 * @see ConverterRegistration
++	 */
++	private Object register(ConverterRegistration converterRegistration) {
++
++		Assert.notNull(converterRegistration, "Converter registration must not be null");
++
++		ConvertiblePair pair = converterRegistration.getConvertiblePair();
++
++		registerReadingDirection(converterRegistration, pair);
++		registerWritingDirection(converterRegistration, pair);
++
++		return converterRegistration.getConverter();
++	}
++
++	private void registerReadingDirection(ConverterRegistration registration, ConvertiblePair pair) {
++		if (!registration.isReading()) {
++			return;
++		}
++
++		readingPairs.add(pair);
++
++		if (logger.isWarnEnabled()
++				&& !registration.isSimpleSourceType()
++				&& !Collection.class.isAssignableFrom(pair.getSourceType())) {
++			logger.warn(String.format(READ_CONVERTER_NOT_SIMPLE,
++					pair.getSourceType(), pair.getTargetType()));
++		}
++	}
++
++	private void registerWritingDirection(ConverterRegistration registration, ConvertiblePair pair) {
++		if (!registration.isWriting()) {
++			return;
++		}
++
++		writingPairs.add(pair);
++		customSimpleTypes.add(pair.getSourceType());
++
++		if (logger.isWarnEnabled()
++				&& !registration.isSimpleTargetType()
++				&& !Collection.class.isAssignableFrom(pair.getTargetType())) {
++			logger.warn(String.format(WRITE_CONVERTER_NOT_SIMPLE,
++					pair.getSourceType(), pair.getTargetType()));
++		}
++	}
++
+ 	/**
+ 	 * Returns the target type to convert to in case we have a custom conversion registered to convert the given source
+ 	 * type into a store native one.
+@@ -514,71 +571,88 @@ public class CustomConversions {
+ 	}
+ 
+ 	/**
+-	 * Value object to cache custom conversion targets.
++	 * Copy-on-write cache that maps a source type to its discovered conversion targets.
++	 * Uses {@link Void} as a sentinel to mark "no target found" so that repeated lookups
++	 * for the same absent pair do not re-scan the converter registry.
+ 	 *
+ 	 * @author Mark Paluch
+ 	 */
+ 	static class ConversionTargetsCache {
+ 
+-		private volatile Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>();
++		private static final Class<?> ABSENT_TARGET_MARKER = AbsentTargetTypeMarker.class;
++
++		private volatile Map<Class<?>, TargetTypes> sourceTypeToTargets = new HashMap<>();
+ 
+ 		/**
+-		 * Get or compute a target type given its {@code sourceType}. Returns a cached {@link Optional} if the value
+-		 * (present/absent target) was computed once. Otherwise, uses a {@link Function mappingFunction} to determine a
+-		 * possibly existing target type.
++		 * Look up the best-matching write target for a source type without a specific
++		 * requested target. Uses {@link AbsentTargetTypeMarker} as the cache key so that
++		 * "no target" results are isolated from any future requested-target lookups.
+ 		 *
+ 		 * @param sourceType must not be {@literal null}.
+ 		 * @param mappingFunction must not be {@literal null}.
+-		 * @return the optional target type.
++		 * @return the target type, or {@literal null} if absent.
+ 		 */
+ 		public @Nullable Class<?> computeIfAbsent(Class<?> sourceType,
+ 				Function<ConvertiblePair, Class<?>> mappingFunction) {
+-			return computeIfAbsent(sourceType, AbsentTargetTypeMarker.class, mappingFunction);
++			return computeIfAbsent(sourceType, ABSENT_TARGET_MARKER, mappingFunction);
+ 		}
+ 
+ 		/**
+-		 * Get or compute a target type given its {@code sourceType} and {@code targetType}. Returns a cached
+-		 * {@link Optional} if the value (present/absent target) was computed once. Otherwise, uses a {@link Function
+-		 * mappingFunction} to determine a possibly existing target type.
++		 * Look up a conversion target for a specific source → requested-target pair.
++		 * The absent-marker sentinel and real requested targets use different keys, so
++		 * caching an absent result never pollutes a subsequent lookup with a concrete target.
+ 		 *
+ 		 * @param sourceType must not be {@literal null}.
+ 		 * @param targetType must not be {@literal null}.
+ 		 * @param mappingFunction must not be {@literal null}.
+-		 * @return the optional target type.
++		 * @return the target type, or {@literal null} if absent.
+ 		 */
+ 		public @Nullable Class<?> computeIfAbsent(Class<?> sourceType, Class<?> targetType,
+ 				Function<ConvertiblePair, Class<?>> mappingFunction) {
+ 
+-			TargetTypes targetTypes = customReadTargetTypes.get(sourceType);
+-
+-			if (targetTypes == null) {
++			TargetTypes targetTypes = getOrCreateTargetTypes(sourceType);
++			return targetTypes.computeIfAbsent(targetType, mappingFunction);
++		}
+ 
+-				synchronized (this) {
++		/**
++		 * Returns the {@link TargetTypes} entry for the given source type, creating it
++		 * with copy-on-write semantics if it does not yet exist.
++		 */
++		private TargetTypes getOrCreateTargetTypes(Class<?> sourceType) {
+ 
+-					TargetTypes customReadTarget = customReadTargetTypes.get(sourceType);
+-					if (customReadTarget != null) {
+-						targetTypes = customReadTarget;
+-					} else {
++			TargetTypes existing = sourceTypeToTargets.get(sourceType);
++			if (existing != null) {
++				return existing;
++			}
+ 
+-						Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>(this.customReadTargetTypes);
+-						targetTypes = new TargetTypes(sourceType);
+-						customReadTargetTypes.put(sourceType, targetTypes);
+-						this.customReadTargetTypes = customReadTargetTypes;
+-					}
++			synchronized (this) {
++				existing = sourceTypeToTargets.get(sourceType);
++				if (existing != null) {
++					return existing;
+ 				}
+-			}
+ 
+-			return targetTypes.computeIfAbsent(targetType, mappingFunction);
++				TargetTypes newTargetTypes = new TargetTypes(sourceType);
++				Map<Class<?>, TargetTypes> copy = new HashMap<>(sourceTypeToTargets);
++				copy.put(sourceType, newTargetTypes);
++				sourceTypeToTargets = copy;
++				return newTargetTypes;
++			}
+ 		}
+ 
+ 		/**
+-		 * Marker type for absent target type caching.
++		 * Sentinel marker type used as a cache key when no conversion target exists.
++		 * This ensures that "absent" results are cached without polluting lookups
++		 * for other requested target types under the same source.
+ 		 */
+ 		interface AbsentTargetTypeMarker {}
+ 	}
+ 
+ 	/**
+-	 * Value object for a specific {@code Class source type} to determine possible target conversion types.
++	 * Per-source-type cache of conversion targets. Each entry maps a requested target
++	 * type (or the absent-marker sentinel) to the resolved target class.
++	 * <p>
++	 * Uses copy-on-write to allow lock-free reads while maintaining thread safety
++	 * during writes.
+ 	 *
+ 	 * @author Mark Paluch
+ 	 */
+@@ -592,37 +666,39 @@ public class CustomConversions {
+ 		}
+ 
+ 		/**
+-		 * Get or compute a target type given its {@code targetType}. Returns a cached {@link Optional} if the value
+-		 * (present/absent target) was computed once. Otherwise, uses a {@link Function mappingFunction} to determine a
+-		 * possibly existing target type.
++		 * Returns a cached target if one exists, otherwise computes it via the mapping
++		 * function and stores the result. Uses {@link Void} as the sentinel for "no
++		 * target found" so that callers can distinguish between "not yet computed" and
++		 * "computed but absent".
+ 		 *
+ 		 * @param targetType must not be {@literal null}.
+ 		 * @param mappingFunction must not be {@literal null}.
+-		 * @return the optional target type.
++		 * @return the resolved target type, or {@literal null} if absent.
+ 		 */
+ 		public @Nullable Class<?> computeIfAbsent(Class<?> targetType,
+ 				Function<ConvertiblePair, Class<?>> mappingFunction) {
+ 
+-			Class<?> optionalTarget = conversionTargets.get(targetType);
+-
+-			if (optionalTarget == null) {
+-
+-				synchronized (this) {
+-
+-					Class<?> conversionTarget = conversionTargets.get(targetType);
+-					if (conversionTarget != null) {
+-						optionalTarget = conversionTarget;
+-					} else {
++			Class<?> cached = conversionTargets.get(targetType);
++			if (cached != null) {
++				return isAbsentMarker(cached) ? null : cached;
++			}
+ 
+-						optionalTarget = mappingFunction.apply(new ConvertiblePair(sourceType, targetType));
+-						Map<Class<?>, Class<?>> conversionTargets = new HashMap<>(this.conversionTargets);
+-						conversionTargets.put(targetType, optionalTarget == null ? Void.class : optionalTarget);
+-						this.conversionTargets = conversionTargets;
+-					}
++			synchronized (this) {
++				cached = conversionTargets.get(targetType);
++				if (cached != null) {
++					return isAbsentMarker(cached) ? null : cached;
+ 				}
++
++				Class<?> resolved = mappingFunction.apply(new ConvertiblePair(sourceType, targetType));
++				Map<Class<?>, Class<?>> copy = new HashMap<>(conversionTargets);
++				copy.put(targetType, resolved == null ? Void.class : resolved);
++				conversionTargets = copy;
++				return resolved;
+ 			}
++		}
+ 
+-			return Void.class.equals(optionalTarget) ? null : optionalTarget;
++		private static boolean isAbsentMarker(Class<?> type) {
++			return Void.class.equals(type);
+ 		}
+ 	}
+ 
+diff --git a/src/test/java/org/springframework/data/convert/CustomConversionsUnitTests.java b/src/test/java/org/springframework/data/convert/CustomConversionsUnitTests.java
+index badbb142..21c7436e 100644
+--- a/src/test/java/org/springframework/data/convert/CustomConversionsUnitTests.java
++++ b/src/test/java/org/springframework/data/convert/CustomConversionsUnitTests.java
+@@ -469,6 +469,135 @@ class CustomConversionsUnitTests {
+ 
+ 	static class DateFormat extends Format {}
+ 
+-	static class SimpleDateFormat extends DateFormat {}
++	static class SimpleDateFormat extends Format {}
+ 
++	// ===== Additional tests for refactored converter registration and cache semantics =====
++
++	@Test
++	void userConverterIsNotAffectedByDefaultConverterFilter() {
++
++		var registry = mock(ConverterRegistry.class);
++
++		var config = new ConverterConfiguration(StoreConversions.NONE,
++				Collections.singletonList(LocalDateTimeToDateConverter.INSTANCE),
++				Predicate.<ConvertiblePair> isEqual(new ConvertiblePair(java.time.LocalDateTime.class, Date.class)).negate());
++
++		new CustomConversions(config).registerConvertersIn(registry);
++
++		verify(registry).addConverter(any(LocalDateTimeToDateConverter.class));
++	}
++
++	@Test
++	void defaultConverterIsSkippedWhenFilterRejectsIt() {
++
++		var registry = mock(ConverterRegistry.class);
++
++		var holder = new SimpleTypeHolder(Collections.singleton(Date.class), true);
++
++		var config = new ConverterConfiguration(StoreConversions.of(holder), Collections.emptyList(),
++				Predicate.<ConvertiblePair> isEqual(new ConvertiblePair(java.time.LocalDateTime.class, Date.class)).negate());
++
++		new CustomConversions(config).registerConvertersIn(registry);
++
++		verify(registry, never()).addConverter(any(Jsr310Converters.LocalDateTimeToDateConverter.class));
++	}
++
++	@Test
++	void storeConverterRegistersAccordingToStoreSimpleTypeRules() {
++
++		var registry = mock(ConverterRegistry.class);
++
++		var holder = new SimpleTypeHolder(Collections.singleton(String.class), true);
++
++		var conversions = new CustomConversions(StoreConversions.of(holder, FormatToStringConverter.INSTANCE),
++				Collections.emptyList());
++		conversions.registerConvertersIn(registry);
++
++		assertThat(conversions.isSimpleType(Format.class)).isTrue();
++		verify(registry).addConverter(any(FormatToStringConverter.class));
++	}
++
++	@Test
++	void absentTargetCacheDoesNotPolluteRequestedTargetCache() {
++
++		var conversions = new CustomConversions(StoreConversions.NONE,
++				Collections.singletonList(FormatToStringConverter.INSTANCE));
++
++		assertThat(conversions.getCustomWriteTarget(Format.class, Object.class)).isEmpty();
++
++		assertThat(conversions.getCustomWriteTarget(Format.class)).hasValue(String.class);
++
++		assertThat(conversions.getCustomWriteTarget(Format.class, Object.class)).isEmpty();
++	}
++
++	@Test
++	void absentTargetForOneRequestedTargetDoesNotAffectAnotherRequestedTarget() {
++
++		var conversions = new CustomConversions(StoreConversions.NONE,
++				Collections.singletonList(FormatToStringConverter.INSTANCE));
++
++		assertThat(conversions.getCustomWriteTarget(Format.class, Number.class)).isEmpty();
++
++		assertThat(conversions.getCustomWriteTarget(Format.class, String.class)).hasValue(String.class);
++
++		assertThat(conversions.getCustomWriteTarget(Format.class, Number.class)).isEmpty();
++	}
++
++	@Test
++	void cglibProxyTypeHitsCustomWriteTarget() {
++
++		var conversions = new CustomConversions(StoreConversions.NONE,
++				Collections.singletonList(FormatToStringConverter.INSTANCE));
++
++		Class<?> proxyType = createProxyTypeFor(Format.class);
++
++		assertThat(conversions.getCustomWriteTarget(proxyType)).hasValue(String.class);
++	}
++
++	@Test
++	void cglibProxyTypeHitsCustomReadTarget() {
++
++		var conversions = new CustomConversions(StoreConversions.NONE,
++				Collections.singletonList(StringToFormatConverter.INSTANCE));
++
++		Class<?> proxyType = createProxyTypeFor(Format.class);
++
++		assertThat(conversions.hasCustomReadTarget(String.class, proxyType)).isTrue();
++	}
++
++	@Test
++	void nullPropertyValueConversionsDoesNotAffectBehavior() {
++
++		var conversions = new CustomConversions(
++				new ConverterConfiguration(StoreConversions.NONE, Collections.emptyList(), (it) -> true, null));
++
++		assertThat(conversions.getPropertyValueConversions()).isNull();
++		assertThat(conversions.getCustomWriteTarget(Format.class)).isEmpty();
++	}
++
++	@Test
++	void getCustomWriteTargetWithAndWithoutRequestedTargetDoNotPolluteEachOther() {
++
++		var conversions = new CustomConversions(StoreConversions.NONE,
++				Collections.singletonList(FormatToStringConverter.INSTANCE));
++
++		assertThat(conversions.getCustomWriteTarget(Format.class, Object.class)).isEmpty();
++
++		assertThat(conversions.getCustomWriteTarget(Format.class)).hasValue(String.class);
++
++		assertThat(conversions.getCustomWriteTarget(Format.class, Object.class)).isEmpty();
++
++		assertThat(conversions.getCustomWriteTarget(Format.class, String.class)).hasValue(String.class);
++	}
++
++	@WritingConverter
++	enum NumberToStringConverter2 implements Converter<Number, String> {
++
++		INSTANCE;
++
++		@Override
++		public String convert(Number source) {
++			return source.toString();
++		}
++	}
+ }
