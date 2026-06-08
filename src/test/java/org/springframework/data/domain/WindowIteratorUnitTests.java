@@ -24,6 +24,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import org.junit.jupiter.api.Test;
@@ -153,5 +154,161 @@ class WindowIteratorUnitTests {
 
 		List<String> items = Streamable.of(() -> iterator).toList();
 		assertThat(items).containsExactly("d", "c", "b", "a");
+	}
+
+	@Test
+	void repeatedHasNextDoesNotReloadCurrentWindow() {
+
+		AtomicInteger invocationCount = new AtomicInteger();
+		Window<String> window = Window.from(List.of("a", "b"), OffsetScrollPosition.positionFunction(0));
+		WindowIterator<String> iterator = WindowIterator.of(it -> {
+			invocationCount.incrementAndGet();
+			return window;
+		}).startingAt(ScrollPosition.offset());
+
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.hasNext()).isTrue();
+
+		assertThat(invocationCount.get()).isEqualTo(1);
+	}
+
+	@Test
+	void terminalHasNextDoesNotReloadAfterExhaustion() {
+
+		AtomicInteger invocationCount = new AtomicInteger();
+		Window<String> window = Window.from(List.of("a"), OffsetScrollPosition.positionFunction(0));
+		WindowIterator<String> iterator = WindowIterator.of(it -> {
+			invocationCount.incrementAndGet();
+			return window;
+		}).startingAt(ScrollPosition.offset());
+
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("a");
+		assertThat(iterator.hasNext()).isFalse();
+		assertThat(iterator.hasNext()).isFalse();
+		assertThat(iterator.hasNext()).isFalse();
+
+		assertThat(invocationCount.get()).isEqualTo(1);
+	}
+
+	@Test
+	void nextLoadsFollowingWindowUsingLastForwardPosition() {
+
+		var capturedPositions = new ArrayList<ScrollPosition>();
+		Window<String> page1 = Window.from(List.of("a", "b"), OffsetScrollPosition.positionFunction(0), true);
+		Window<String> page2 = Window.from(List.of("c", "d"), OffsetScrollPosition.positionFunction(2));
+		WindowIterator<String> iterator = WindowIterator.of(it -> {
+			capturedPositions.add(it);
+			return it.isInitial() ? page1 : page2;
+		}).startingAt(ScrollPosition.offset());
+
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("a");
+		assertThat(iterator.next()).isEqualTo("b");
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("c");
+		assertThat(iterator.next()).isEqualTo("d");
+
+		assertThat(capturedPositions).hasSize(2);
+		assertThat(capturedPositions.get(0)).isEqualTo(ScrollPosition.offset());
+		assertThat(capturedPositions.get(1)).isEqualTo(ScrollPosition.offset(1));
+	}
+
+	@Test
+	void backwardKeysetUsesFirstPositionForNextWindow() {
+
+		var positions = new ArrayList<ScrollPosition>();
+		Window<String> page2 = Window.from(List.of("c", "d"),
+				value -> KeysetScrollPosition.of(Map.of("k", 10 + value), Direction.BACKWARD), true);
+		Window<String> page1 = Window.from(List.of("a", "b"),
+				value -> KeysetScrollPosition.of(Map.of("k", value), Direction.BACKWARD));
+		WindowIterator<String> iterator = WindowIterator.of(it -> {
+			positions.add(it);
+			if (it instanceof KeysetScrollPosition ksp) {
+				if (Integer.valueOf(10).equals(ksp.getKeys().get("k"))) {
+					return page1;
+				}
+			}
+			return page2;
+		}).startingAt(ScrollPosition.keyset().backward());
+
+		List<String> items = Streamable.of(() -> iterator).toList();
+
+		assertThat(items).containsExactly("d", "c", "b", "a");
+		assertThat(positions).hasSize(2);
+		assertThat(positions.get(1)).isEqualTo(ScrollPosition.backward(Map.of("k", 10)));
+	}
+
+	@Test
+	void nullWindowFromFunctionFailsWithIllegalStateException() {
+
+		WindowIterator<Object> iterator = WindowIterator.of(it -> (Window<Object>) null)
+				.startingAt(ScrollPosition.offset());
+
+		assertThatExceptionOfType(IllegalStateException.class)
+				.isThrownBy(iterator::hasNext)
+				.withMessageContaining("null");
+	}
+
+	@Test
+	void emptyWindowWithHasNextFailsWithIllegalStateException() {
+
+		Window<String> badWindow = Window.from(Collections.emptyList(), value -> ScrollPosition.offset(), true);
+		WindowIterator<String> iterator = WindowIterator.of(it -> badWindow).startingAt(ScrollPosition.offset());
+
+		assertThatExceptionOfType(IllegalStateException.class)
+				.isThrownBy(iterator::hasNext)
+				.withMessageContaining("empty");
+	}
+
+	@Test
+	void nonProgressingScrollPositionFailsWithIllegalStateException() {
+
+		Window<String> stuckWindow = Window.from(List.of("a", "b"), value -> ScrollPosition.offset(), true);
+		WindowIterator<String> iterator = WindowIterator.of(it -> stuckWindow).startingAt(ScrollPosition.offset());
+
+		iterator.next();
+		iterator.next();
+
+		assertThatExceptionOfType(IllegalStateException.class)
+				.isThrownBy(iterator::hasNext)
+				.withMessageContaining("ScrollPosition did not advance");
+	}
+
+	@Test
+	void positionAtFailureDoesNotAdvanceIteratorState() {
+
+		var invocations = new ArrayList<ScrollPosition>();
+		Window<String> firstWindow = Window.from(List.of("a", "b"), OffsetScrollPosition.positionFunction(0), false);
+		Window<String> secondWindow = Window.from(List.of("c", "d"), OffsetScrollPosition.positionFunction(100));
+		WindowIterator<String> iterator = WindowIterator.of(it -> {
+			invocations.add(it);
+			if (invocations.size() == 1) {
+				return firstWindow;
+			}
+			return secondWindow;
+		}).startingAt(ScrollPosition.offset());
+
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("a");
+		assertThat(iterator.next()).isEqualTo("b");
+
+		assertThat(iterator.hasNext()).isFalse();
+		assertThat(iterator.hasNext()).isFalse();
+		assertThat(iterator.hasNext()).isFalse();
+
+		assertThat(invocations).hasSize(1);
+	}
+
+	@Test
+	void nextStillThrowsNoSuchElementExceptionWhenNoDataAvailable() {
+
+		Window<Object> window = Window.from(Collections.emptyList(), value -> ScrollPosition.offset());
+		WindowIterator<Object> iterator = WindowIterator.of(it -> window).startingAt(ScrollPosition.offset());
+
+		assertThat(iterator.hasNext()).isFalse();
+		assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(iterator::next);
+		assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(iterator::next);
 	}
 }

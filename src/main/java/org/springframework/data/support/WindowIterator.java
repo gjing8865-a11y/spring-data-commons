@@ -76,10 +76,12 @@ public class WindowIterator<T> implements Iterator<T> {
 	@Override
 	public boolean hasNext() {
 
-		// use while loop instead of recursion to fetch the next window.
 		do {
 			if (currentWindow == null) {
 				currentWindow = windowFunction.apply(currentPosition);
+				if (currentWindow == null) {
+					throw new IllegalStateException("Window function must not return null");
+				}
 			}
 
 			if (currentIterator == null) {
@@ -91,9 +93,19 @@ public class WindowIterator<T> implements Iterator<T> {
 				return true;
 			}
 
-			if (currentWindow != null && currentWindow.hasNext()) {
+			if (currentWindow.hasNext()) {
 
-				currentPosition = getNextPosition(currentPosition, currentWindow);
+				if (currentWindow.isEmpty()) {
+					throw new IllegalStateException("Current window is empty but hasNext() returns true");
+				}
+
+				ScrollPosition nextPosition = getNextPosition(currentPosition, currentWindow);
+				if (nextPosition.equals(currentPosition)) {
+					throw new IllegalStateException(
+							"ScrollPosition did not advance: " + currentPosition);
+				}
+
+				currentPosition = nextPosition;
 				currentIterator = null;
 				currentWindow = null;
 				continue;
@@ -179,7 +191,7 @@ public class WindowIterator<T> implements Iterator<T> {
 
 		@Override
 		public void remove() {
-			delegate.remove();
+			throw new UnsupportedOperationException();
 		}
 	}
 }
