@@ -26,6 +26,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.aopalliance.intercept.MethodInterceptor;
 import org.aopalliance.intercept.MethodInvocation;
@@ -153,38 +154,56 @@ public class JsonProjectingMethodInterceptorFactory implements MethodInterceptor
 			}
 
 			TypeInformation<?> returnType = TypeInformation.fromReturnTypeOf(method);
-			ResolvableType type = ResolvableType.forMethodReturnType(method);
-			boolean isCollectionResult = type.getRawClass() != null && Collection.class.isAssignableFrom(type.getRawClass());
-			type = isCollectionResult ? type : ResolvableType.forClassWithGenerics(List.class, type);
+			ResolvableType originalType = ResolvableType.forMethodReturnType(method);
+			boolean isOptionalResult = Optional.class.equals(originalType.getRawClass());
+			
+			ResolvableType effectiveType = isOptionalResult ? originalType.getGeneric(0) : originalType;
+			boolean isCollectionResult = effectiveType.getRawClass() != null && Collection.class.isAssignableFrom(effectiveType.getRawClass());
+			
+			ResolvableType type = isCollectionResult ? effectiveType : ResolvableType.forClassWithGenerics(List.class, effectiveType);
+			
+			TypeInformation<?> effectiveReturnType = isOptionalResult ? returnType.getRequiredComponentType() : returnType;
 
 			Iterable<String> jsonPaths = getJsonPaths(method);
 
 			for (String jsonPath : jsonPaths) {
 
 				try {
+					Object result = null;
 
-					if (returnType.getRequiredActualType().getType().isInterface()) {
+					if (effectiveReturnType.getRequiredActualType().getType().isInterface()) {
 
-						List<?> result = context.read(jsonPath);
-						Object nested = result.isEmpty() ? null : result.get(0);
+						List<?> list = context.read(jsonPath);
+						Object nested = list.isEmpty() ? null : list.get(0);
 
-						return isCollectionResult && !(nested instanceof Collection) ? result : nested;
+						result = isCollectionResult && !(nested instanceof Collection) ? list : nested;
+					} else {
+
+						boolean definitePath = JsonPath.isPathDefinite(jsonPath);
+						ResolvableType typeForRead = isCollectionResult && definitePath ? ResolvableType.forClassWithGenerics(List.class, type) : type;
+
+						List<?> list = (List<?>) context.read(jsonPath, new ResolvableTypeRef(typeForRead));
+
+						if (isCollectionResult && definitePath) {
+							list = (List<?>) list.get(0);
+						}
+
+						result = isCollectionResult ? list : list.isEmpty() ? null : list.get(0);
 					}
 
-					boolean definitePath = JsonPath.isPathDefinite(jsonPath);
-					type = isCollectionResult && definitePath ? ResolvableType.forClassWithGenerics(List.class, type) : type;
-
-					List<?> result = (List<?>) context.read(jsonPath, new ResolvableTypeRef(type));
-
-					if (isCollectionResult && definitePath) {
-						result = (List<?>) result.get(0);
+					if (isOptionalResult) {
+						return Optional.ofNullable(result);
 					}
 
-					return isCollectionResult ? result : result.isEmpty() ? null : result.get(0);
+					return result;
 
 				} catch (PathNotFoundException o_O) {
 					// continue with next path
 				}
+			}
+
+			if (isOptionalResult) {
+				return Optional.empty();
 			}
 
 			return null;

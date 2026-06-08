@@ -20,6 +20,9 @@ import static org.assertj.core.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 
+import java.io.ByteArrayInputStream;
+import java.util.Optional;
+
 /**
  * Unit tests for {@link ProjectingJackson2HttpMessageConverter}.
  *
@@ -80,4 +83,41 @@ class ProjectingJackson2HttpMessageConverterUnitTests {
 	}
 
 	class ConcreteController extends BaseController<AbstractDto> {}
+
+	@Test
+	void jackson2ConverterCanReadProjectedPayloadWithOptionalGetter() throws Exception {
+		var json = "{\"firstname\" : \"Dave\", \"address\" : { \"zipCode\" : \"01097\" }}";
+		var inputMessage = new MockHttpInputMessage(json.getBytes());
+		var result = converter.read(OptionalSampleInterface.class, inputMessage);
+		
+		assertThat(result.getFirstname()).isPresent().hasValue("Dave");
+		assertThat(result.getZipCode()).isPresent().hasValue("01097");
+		assertThat(result.getMissingProperty()).isEmpty();
+	}
+
+	@ProjectedPayload
+	interface OptionalSampleInterface {
+		Optional<String> getFirstname();
+		@JsonPath("$.address.zipCode")
+		Optional<String> getZipCode();
+		Optional<String> getMissingProperty();
+	}
+
+	static class MockHttpInputMessage implements org.springframework.http.HttpInputMessage {
+		private final byte[] body;
+
+		MockHttpInputMessage(byte[] body) {
+			this.body = body;
+		}
+
+		@Override
+		public java.io.InputStream getBody() {
+			return new ByteArrayInputStream(body);
+		}
+
+		@Override
+		public org.springframework.http.HttpHeaders getHeaders() {
+			return new org.springframework.http.HttpHeaders();
+		}
+	}
 }

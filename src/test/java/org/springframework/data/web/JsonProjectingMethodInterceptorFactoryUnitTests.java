@@ -22,6 +22,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
@@ -288,5 +289,167 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 
 			public String getLastName();
 		}
+	}
+
+	@Test
+	void optionalSimplePropertyPresent() {
+		assertThat(customer.getOptionalFirstname()).isPresent().hasValue("Dave");
+	}
+
+	@Test
+	void optionalSimplePropertyMissing() {
+		assertThat(customer.getOptionalLastname()).isEmpty();
+	}
+
+	@Test
+	void optionalSimplePropertyExplicitlyNull() {
+		var json = "{\"firstname\" : null}";
+		var projection = projectionFactory.createProjection(Customer.class,
+				new ByteArrayInputStream(json.getBytes()));
+		assertThat(projection.getOptionalFirstname()).isEmpty();
+	}
+
+	@Test
+	void optionalNumericPropertyConversion() {
+		var json = "{\"age\" : 30, \"salary\" : 50000.50, \"isEmployed\" : true}";
+		var projection = projectionFactory.createProjection(OptionalProjection.class,
+				new ByteArrayInputStream(json.getBytes()));
+		assertThat(projection.getAge()).isPresent().hasValue(30);
+		assertThat(projection.getSalary()).isPresent().hasValue(50000.50);
+		assertThat(projection.isEmployed()).isPresent().hasValue(true);
+	}
+
+	@Test
+	void optionalBooleanPropertyConversion() {
+		var json = "{\"isActive\" : true}";
+		var projection = projectionFactory.createProjection(OptionalProjection.class,
+				new ByteArrayInputStream(json.getBytes()));
+		assertThat(projection.isActive()).isPresent().hasValue(true);
+	}
+
+	@Test
+	void optionalComplexDtoProperty() {
+		assertThat(customer.getOptionalAddress()).isPresent()
+				.hasValueSatisfying(addr -> assertThat(addr).isEqualTo(new Address("01097", "Dresden")));
+	}
+
+	@Test
+	void optionalNestedProjectionProperty() {
+		assertThat(customer.getOptionalAddressProjection()).isPresent()
+				.hasValueSatisfying(addr -> assertThat(addr.getCity()).isEqualTo("Dresden"));
+	}
+
+	@Test
+	void optionalListOfDtos() {
+		assertThat(customer.getOptionalAddresses()).isPresent()
+				.hasValueSatisfying(list -> assertThat(list).hasSize(2));
+	}
+
+	@Test
+	void optionalListOfNestedProjections() {
+		assertThat(customer.getOptionalAddressProjections()).isPresent()
+				.hasValueSatisfying(list -> assertThat(list).hasSize(2));
+	}
+
+	@Test
+	void optionalDefaultPropertyPathWithoutJsonPath() {
+		assertThat(customer.getOptionalFirstname()).isPresent().hasValue("Dave");
+	}
+
+	@Test
+	void optionalMultiPathFallbackFirstPathMissing() {
+		assertThat(customer.getName().getOptionalSomeName()).isPresent().hasValue("Dave");
+	}
+
+	@Test
+	void optionalMultiPathFallbackFirstPathExistsButIsNull() {
+		var json = "{\"lastname\" : null, \"firstname\" : \"Dave\"}";
+		var projection = projectionFactory.createProjection(Customer.class,
+				new ByteArrayInputStream(json.getBytes()));
+		assertThat(projection.getName().getOptionalSomeName()).isEmpty();
+	}
+
+	@Test
+	void nonOptionalBehaviorRemainsUnchanged() {
+		assertThat(customer.getFirstname()).isEqualTo("Dave");
+		assertThat(customer.getAddress()).isEqualTo(new Address("01097", "Dresden"));
+	}
+
+	interface OptionalProjection {
+		Optional<Integer> getAge();
+		Optional<Double> getSalary();
+		Optional<Boolean> isEmployed();
+		Optional<Boolean> isActive();
+	}
+
+	interface Customer {
+
+		String getFirstname();
+
+		Optional<String> getOptionalFirstname();
+
+		Optional<String> getOptionalLastname();
+
+		@JsonPath("$")
+		Name getName();
+
+		Address getAddress();
+
+		Optional<Address> getOptionalAddress();
+
+		List<Address> getAddresses();
+
+		Optional<List<Address>> getOptionalAddresses();
+
+		@JsonPath("$.addresses")
+		List<AddressProjection> getAddressProjections();
+
+		@JsonPath("$.addresses")
+		Optional<List<AddressProjection>> getOptionalAddressProjections();
+
+		@JsonPath("$.firstname")
+		String getBar();
+
+		@JsonPath("$.address")
+		AddressProjection getAddressProjection();
+
+		@JsonPath("$.address")
+		Optional<AddressProjection> getOptionalAddressProjection();
+
+		@JsonPath("$.address.zipCode")
+		String getNestedZipCode();
+
+		@JsonPath("$.address")
+		AnotherAddressProjection getAnotherAddressProjection();
+
+		@JsonPath("$.addresses")
+		List<AnotherAddressProjection> getAnotherAddressProjections();
+
+		@JsonPath("$.address")
+		Set<AnotherAddressProjection> getAnotherAddressProjectionAsCollection();
+
+		@JsonPath("$..city")
+		String getNestedCity();
+
+		@JsonPath("$..city")
+		List<String> getNestedCities();
+	}
+
+	interface Name {
+
+		@JsonPath("$.firstname")
+		String getFirstname();
+
+		// Not available in the payload
+		@JsonPath("$.lastname")
+		@Nullable
+		String getLastname();
+
+		// First one not available in the payload
+		@JsonPath({ "$.lastname", "$.firstname" })
+		String getSomeName();
+
+		@JsonPath({ "$.lastname", "$.firstname" })
+		Optional<String> getOptionalSomeName();
 	}
 }

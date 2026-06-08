@@ -1,0 +1,382 @@
+diff --git a/src/main/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactory.java b/src/main/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactory.java
+index 6358eb63..25ce81e1 100644
+--- a/src/main/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactory.java
++++ b/src/main/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactory.java
+@@ -26,6 +26,7 @@ import java.util.Collection;
+ import java.util.Collections;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Optional;
+ 
+ import org.aopalliance.intercept.MethodInterceptor;
+ import org.aopalliance.intercept.MethodInvocation;
+@@ -153,40 +154,58 @@ public class JsonProjectingMethodInterceptorFactory implements MethodInterceptor
+ 			}
+ 
+ 			TypeInformation<?> returnType = TypeInformation.fromReturnTypeOf(method);
+-			ResolvableType type = ResolvableType.forMethodReturnType(method);
+-			boolean isCollectionResult = type.getRawClass() != null && Collection.class.isAssignableFrom(type.getRawClass());
+-			type = isCollectionResult ? type : ResolvableType.forClassWithGenerics(List.class, type);
++			ResolvableType originalType = ResolvableType.forMethodReturnType(method);
++			boolean isOptionalResult = Optional.class.equals(originalType.getRawClass());
++			
++			ResolvableType effectiveType = isOptionalResult ? originalType.getGeneric(0) : originalType;
++			boolean isCollectionResult = effectiveType.getRawClass() != null && Collection.class.isAssignableFrom(effectiveType.getRawClass());
++			
++			ResolvableType type = isCollectionResult ? effectiveType : ResolvableType.forClassWithGenerics(List.class, effectiveType);
++			
++			TypeInformation<?> effectiveReturnType = isOptionalResult ? returnType.getRequiredComponentType() : returnType;
+ 
+ 			Iterable<String> jsonPaths = getJsonPaths(method);
+ 
+ 			for (String jsonPath : jsonPaths) {
+ 
+ 				try {
++					Object result = null;
+ 
+-					if (returnType.getRequiredActualType().getType().isInterface()) {
++					if (effectiveReturnType.getRequiredActualType().getType().isInterface()) {
+ 
+-						List<?> result = context.read(jsonPath);
+-						Object nested = result.isEmpty() ? null : result.get(0);
++						List<?> list = context.read(jsonPath);
++						Object nested = list.isEmpty() ? null : list.get(0);
+ 
+-						return isCollectionResult && !(nested instanceof Collection) ? result : nested;
+-					}
++						result = isCollectionResult && !(nested instanceof Collection) ? list : nested;
++					} else {
++
++						boolean definitePath = JsonPath.isPathDefinite(jsonPath);
++						ResolvableType typeForRead = isCollectionResult && definitePath ? ResolvableType.forClassWithGenerics(List.class, type) : type;
++
++						List<?> list = (List<?>) context.read(jsonPath, new ResolvableTypeRef(typeForRead));
+ 
+-					boolean definitePath = JsonPath.isPathDefinite(jsonPath);
+-					type = isCollectionResult && definitePath ? ResolvableType.forClassWithGenerics(List.class, type) : type;
++						if (isCollectionResult && definitePath) {
++							list = (List<?>) list.get(0);
++						}
+ 
+-					List<?> result = (List<?>) context.read(jsonPath, new ResolvableTypeRef(type));
++						result = isCollectionResult ? list : list.isEmpty() ? null : list.get(0);
++					}
+ 
+-					if (isCollectionResult && definitePath) {
+-						result = (List<?>) result.get(0);
++					if (isOptionalResult) {
++						return Optional.ofNullable(result);
+ 					}
+ 
+-					return isCollectionResult ? result : result.isEmpty() ? null : result.get(0);
++					return result;
+ 
+ 				} catch (PathNotFoundException o_O) {
+ 					// continue with next path
+ 				}
+ 			}
+ 
++			if (isOptionalResult) {
++				return Optional.empty();
++			}
++
+ 			return null;
+ 		}
+ 
+diff --git a/src/test/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactoryUnitTests.java b/src/test/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactoryUnitTests.java
+index 82dc4b9a..944bc3ff 100755
+--- a/src/test/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactoryUnitTests.java
++++ b/src/test/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactoryUnitTests.java
+@@ -22,6 +22,7 @@ import tools.jackson.databind.ObjectMapper;
+ import java.io.ByteArrayInputStream;
+ import java.nio.charset.StandardCharsets;
+ import java.util.List;
++import java.util.Optional;
+ import java.util.Set;
+ 
+ import org.jspecify.annotations.Nullable;
+@@ -289,4 +290,166 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
+ 			public String getLastName();
+ 		}
+ 	}
++
++	@Test
++	void optionalSimplePropertyPresent() {
++		assertThat(customer.getOptionalFirstname()).isPresent().hasValue("Dave");
++	}
++
++	@Test
++	void optionalSimplePropertyMissing() {
++		assertThat(customer.getOptionalLastname()).isEmpty();
++	}
++
++	@Test
++	void optionalSimplePropertyExplicitlyNull() {
++		var json = "{\"firstname\" : null}";
++		var projection = projectionFactory.createProjection(Customer.class,
++				new ByteArrayInputStream(json.getBytes()));
++		assertThat(projection.getOptionalFirstname()).isEmpty();
++	}
++
++	@Test
++	void optionalNumericPropertyConversion() {
++		var json = "{\"age\" : 30, \"salary\" : 50000.50, \"isEmployed\" : true}";
++		var projection = projectionFactory.createProjection(OptionalProjection.class,
++				new ByteArrayInputStream(json.getBytes()));
++		assertThat(projection.getAge()).isPresent().hasValue(30);
++		assertThat(projection.getSalary()).isPresent().hasValue(50000.50);
++		assertThat(projection.isEmployed()).isPresent().hasValue(true);
++	}
++
++	@Test
++	void optionalBooleanPropertyConversion() {
++		var json = "{\"isActive\" : true}";
++		var projection = projectionFactory.createProjection(OptionalProjection.class,
++				new ByteArrayInputStream(json.getBytes()));
++		assertThat(projection.isActive()).isPresent().hasValue(true);
++	}
++
++	@Test
++	void optionalComplexDtoProperty() {
++		assertThat(customer.getOptionalAddress()).isPresent()
++				.hasValueSatisfying(addr -> assertThat(addr).isEqualTo(new Address("01097", "Dresden")));
++	}
++
++	@Test
++	void optionalNestedProjectionProperty() {
++		assertThat(customer.getOptionalAddressProjection()).isPresent()
++				.hasValueSatisfying(addr -> assertThat(addr.getCity()).isEqualTo("Dresden"));
++	}
++
++	@Test
++	void optionalListOfDtos() {
++		assertThat(customer.getOptionalAddresses()).isPresent()
++				.hasValueSatisfying(list -> assertThat(list).hasSize(2));
++	}
++
++	@Test
++	void optionalListOfNestedProjections() {
++		assertThat(customer.getOptionalAddressProjections()).isPresent()
++				.hasValueSatisfying(list -> assertThat(list).hasSize(2));
++	}
++
++	@Test
++	void optionalDefaultPropertyPathWithoutJsonPath() {
++		assertThat(customer.getOptionalFirstname()).isPresent().hasValue("Dave");
++	}
++
++	@Test
++	void optionalMultiPathFallbackFirstPathMissing() {
++		assertThat(customer.getName().getOptionalSomeName()).isPresent().hasValue("Dave");
++	}
++
++	@Test
++	void optionalMultiPathFallbackFirstPathExistsButIsNull() {
++		var json = "{\"lastname\" : null, \"firstname\" : \"Dave\"}";
++		var projection = projectionFactory.createProjection(Customer.class,
++				new ByteArrayInputStream(json.getBytes()));
++		assertThat(projection.getName().getOptionalSomeName()).isEmpty();
++	}
++
++	@Test
++	void nonOptionalBehaviorRemainsUnchanged() {
++		assertThat(customer.getFirstname()).isEqualTo("Dave");
++		assertThat(customer.getAddress()).isEqualTo(new Address("01097", "Dresden"));
++	}
++
++	interface OptionalProjection {
++		Optional<Integer> getAge();
++		Optional<Double> getSalary();
++		Optional<Boolean> isEmployed();
++		Optional<Boolean> isActive();
++	}
++
++	interface Customer {
++
++		String getFirstname();
++
++		Optional<String> getOptionalFirstname();
++
++		Optional<String> getOptionalLastname();
++
++		@JsonPath("$")
++		Name getName();
++
++		Address getAddress();
++
++		Optional<Address> getOptionalAddress();
++
++		List<Address> getAddresses();
++
++		Optional<List<Address>> getOptionalAddresses();
++
++		@JsonPath("$.addresses")
++		List<AddressProjection> getAddressProjections();
++
++		@JsonPath("$.addresses")
++		Optional<List<AddressProjection>> getOptionalAddressProjections();
++
++		@JsonPath("$.firstname")
++		String getBar();
++
++		@JsonPath("$.address")
++		AddressProjection getAddressProjection();
++
++		@JsonPath("$.address")
++		Optional<AddressProjection> getOptionalAddressProjection();
++
++		@JsonPath("$.address.zipCode")
++		String getNestedZipCode();
++
++		@JsonPath("$.address")
++		AnotherAddressProjection getAnotherAddressProjection();
++
++		@JsonPath("$.addresses")
++		List<AnotherAddressProjection> getAnotherAddressProjections();
++
++		@JsonPath("$.address")
++		Set<AnotherAddressProjection> getAnotherAddressProjectionAsCollection();
++
++		@JsonPath("$..city")
++		String getNestedCity();
++
++		@JsonPath("$..city")
++		List<String> getNestedCities();
++	}
++
++	interface Name {
++
++		@JsonPath("$.firstname")
++		String getFirstname();
++
++		// Not available in the payload
++		@JsonPath("$.lastname")
++		@Nullable
++		String getLastname();
++
++		// First one not available in the payload
++		@JsonPath({ "$.lastname", "$.firstname" })
++		String getSomeName();
++
++		@JsonPath({ "$.lastname", "$.firstname" })
++		Optional<String> getOptionalSomeName();
++	}
+ }
+diff --git a/src/test/java/org/springframework/data/web/ProjectingJackson2HttpMessageConverterUnitTests.java b/src/test/java/org/springframework/data/web/ProjectingJackson2HttpMessageConverterUnitTests.java
+index 726c03d3..8a3c61ab 100755
+--- a/src/test/java/org/springframework/data/web/ProjectingJackson2HttpMessageConverterUnitTests.java
++++ b/src/test/java/org/springframework/data/web/ProjectingJackson2HttpMessageConverterUnitTests.java
+@@ -20,6 +20,9 @@ import static org.assertj.core.api.Assertions.*;
+ import org.junit.jupiter.api.Test;
+ import org.springframework.http.MediaType;
+ 
++import java.io.ByteArrayInputStream;
++import java.util.Optional;
++
+ /**
+  * Unit tests for {@link ProjectingJackson2HttpMessageConverter}.
+  *
+@@ -80,4 +83,41 @@ class ProjectingJackson2HttpMessageConverterUnitTests {
+ 	}
+ 
+ 	class ConcreteController extends BaseController<AbstractDto> {}
++
++	@Test
++	void jackson2ConverterCanReadProjectedPayloadWithOptionalGetter() throws Exception {
++		var json = "{\"firstname\" : \"Dave\", \"address\" : { \"zipCode\" : \"01097\" }}";
++		var inputMessage = new MockHttpInputMessage(json.getBytes());
++		var result = converter.read(OptionalSampleInterface.class, inputMessage);
++		
++		assertThat(result.getFirstname()).isPresent().hasValue("Dave");
++		assertThat(result.getZipCode()).isPresent().hasValue("01097");
++		assertThat(result.getMissingProperty()).isEmpty();
++	}
++
++	@ProjectedPayload
++	interface OptionalSampleInterface {
++		Optional<String> getFirstname();
++		@JsonPath("$.address.zipCode")
++		Optional<String> getZipCode();
++		Optional<String> getMissingProperty();
++	}
++
++	static class MockHttpInputMessage implements org.springframework.http.HttpInputMessage {
++		private final byte[] body;
++
++		MockHttpInputMessage(byte[] body) {
++			this.body = body;
++		}
++
++		@Override
++		public java.io.InputStream getBody() {
++			return new ByteArrayInputStream(body);
++		}
++
++		@Override
++		public org.springframework.http.HttpHeaders getHeaders() {
++			return new org.springframework.http.HttpHeaders();
++		}
++	}
+ }
+diff --git a/src/test/java/org/springframework/data/web/ProjectingJacksonHttpMessageConverterUnitTests.java b/src/test/java/org/springframework/data/web/ProjectingJacksonHttpMessageConverterUnitTests.java
+index ca782348..ae3e0f9c 100755
+--- a/src/test/java/org/springframework/data/web/ProjectingJacksonHttpMessageConverterUnitTests.java
++++ b/src/test/java/org/springframework/data/web/ProjectingJacksonHttpMessageConverterUnitTests.java
+@@ -21,6 +21,10 @@ import org.junit.jupiter.api.Test;
+ 
+ import org.springframework.core.ResolvableType;
+ import org.springframework.http.MediaType;
++import org.springframework.http.converter.HttpMessageNotReadableException;
++
++import java.io.ByteArrayInputStream;
++import java.util.Optional;
+ 
+ /**
+  * Unit tests for {@link ProjectingJacksonHttpMessageConverter}.
+@@ -78,4 +82,46 @@ class ProjectingJacksonHttpMessageConverterUnitTests {
+ 	}
+ 
+ 	class ConcreteController extends BaseController<AbstractDto> {}
++
++	@Test
++	void jackson3ConverterCanReadProjectedPayloadWithOptionalGetter() throws Exception {
++		var json = "{\"firstname\" : \"Dave\", \"address\" : { \"zipCode\" : \"01097\" }}";
++		var inputMessage = new MockHttpInputMessage(json.getBytes());
++		var result = converter.read(OptionalSampleInterface.class, inputMessage);
++		
++		assertThat(result.getFirstname()).isPresent().hasValue("Dave");
++		assertThat(result.getZipCode()).isPresent().hasValue("01097");
++		assertThat(result.getMissingProperty()).isEmpty();
++	}
++
++	@Test
++	void unannotatedInterfaceIsStillNotReadable() {
++		assertThat(converter.canRead(UnannotatedInterface.class, ANYTHING_JSON)).isFalse();
++	}
++
++	@ProjectedPayload
++	interface OptionalSampleInterface {
++		Optional<String> getFirstname();
++		@JsonPath("$.address.zipCode")
++		Optional<String> getZipCode();
++		Optional<String> getMissingProperty();
++	}
++
++	static class MockHttpInputMessage implements org.springframework.http.HttpInputMessage {
++		private final byte[] body;
++
++		MockHttpInputMessage(byte[] body) {
++			this.body = body;
++		}
++
++		@Override
++		public java.io.InputStream getBody() {
++			return new ByteArrayInputStream(body);
++		}
++
++		@Override
++		public org.springframework.http.HttpHeaders getHeaders() {
++			return new org.springframework.http.HttpHeaders();
++		}
++	}
+ }
