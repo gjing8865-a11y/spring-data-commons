@@ -156,6 +156,129 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "merged"), parameter, reference);
 	}
 
+	@Test
+	void discoversOffsetWithPrefix() {
+
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_offset", "5");
+
+		assertThat(resolver.resolveArgument(PARAMETER, null, new ServletWebRequest(request), null))
+				.isEqualTo(ScrollPosition.offset(5));
+	}
+
+	@Test
+	void prefixWithNoMatchReturnsNull() {
+
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("offset", "5");
+
+		assertThat(resolver.resolveArgument(PARAMETER, null, new ServletWebRequest(request), null)).isNull();
+	}
+
+	@Test
+	void discoversOffsetWithPrefixAndQualifier() {
+
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_hello_offset", "5");
+
+		assertThat(resolver.resolveArgument(parameter, null, new ServletWebRequest(request), null))
+				.isEqualTo(ScrollPosition.offset(5));
+	}
+
+	@Test
+	void discoversOffsetWithPrefixAndCustomOffsetParameter() {
+
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		resolver.setOffsetParameter("cursor");
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_hello_cursor", "5");
+
+		assertThat(resolver.resolveArgument(parameter, null, new ServletWebRequest(request), null))
+				.isEqualTo(ScrollPosition.offset(5));
+	}
+
+	@Test
+	void discoversOffsetWithPrefixAndCustomQualifierDelimiter() {
+
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		resolver.setQualifierDelimiter(".");
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_hello.offset", "5");
+
+		assertThat(resolver.resolveArgument(parameter, null, new ServletWebRequest(request), null))
+				.isEqualTo(ScrollPosition.offset(5));
+	}
+
+	@Test
+	void setPrefixNullResetsToDefault() {
+
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		resolver.setPrefix(null);
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("offset", "5");
+
+		assertThat(resolver.resolveArgument(PARAMETER, null, new ServletWebRequest(request), null))
+				.isEqualTo(ScrollPosition.offset(5));
+	}
+
+	@Test
+	void prefixDoesNotAffectQualifierDelimiterBehavior() {
+
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_hello_offset", "5");
+
+		assertThat(resolver.resolveArgument(parameter, null, new ServletWebRequest(request), null))
+				.isEqualTo(ScrollPosition.offset(5));
+	}
+
+	@Test
+	void prefixWithOptionalReturnsEmptyWhenMissing() {
+
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("offset", "5");
+
+		var result = resolver.resolveArgument(OPTIONAL_PARAMETER, null, new ServletWebRequest(request), null);
+		assertThat(result).isEqualTo(Optional.empty());
+	}
+
+	@Test
+	void prefixWithOptionalReturnsValueWhenPresent() {
+
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_offset", "5");
+
+		var result = resolver.resolveArgument(OPTIONAL_PARAMETER, null, new ServletWebRequest(request), null);
+		assertThat(result).isEqualTo(Optional.of(ScrollPosition.offset(5)));
+	}
+
 	@Nullable
 	private Object resolveOffset(HttpServletRequest request, MethodParameter parameter) {
 		return sut.resolveArgument(parameter, null, new ServletWebRequest(request), null);
