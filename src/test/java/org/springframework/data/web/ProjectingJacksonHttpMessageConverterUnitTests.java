@@ -64,6 +64,16 @@ class ProjectingJacksonHttpMessageConverterUnitTests {
 		assertThat(converter.canRead(ResolvableType.forMethodParameter(method, 0), ANYTHING_JSON)).isFalse();
 	}
 
+	@Test
+	void canReadProjectedPayloadWithOptionalGetter() {
+		assertThat(converter.canRead(SampleInterfaceWithOptional.class, ANYTHING_JSON)).isTrue();
+	}
+
+	@ProjectedPayload
+	interface SampleInterfaceWithOptional {
+		java.util.Optional<String> getOptionalString();
+	}
+
 	@ProjectedPayload
 	interface SampleInterface {}
 

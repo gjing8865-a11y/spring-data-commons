@@ -154,6 +154,13 @@ public class JsonProjectingMethodInterceptorFactory implements MethodInterceptor
 
 			TypeInformation<?> returnType = TypeInformation.fromReturnTypeOf(method);
 			ResolvableType type = ResolvableType.forMethodReturnType(method);
+
+			boolean isOptionalResult = type.getRawClass() == java.util.Optional.class;
+			if (isOptionalResult) {
+				type = type.getGeneric(0);
+				returnType = TypeInformation.of(type);
+			}
+
 			boolean isCollectionResult = type.getRawClass() != null && Collection.class.isAssignableFrom(type.getRawClass());
 			type = isCollectionResult ? type : ResolvableType.forClassWithGenerics(List.class, type);
 

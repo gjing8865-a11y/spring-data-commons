@@ -171,6 +171,85 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 		assertThat(projection.users()).hasSize(2);
 	}
 
+	@Test
+	void supportsOptionalProjection() {
+		var json = "{"
+				+ "\"firstname\": \"Dave\", "
+				+ "\"nullname\": null, "
+				+ "\"age\": 42, "
+				+ "\"active\": true, "
+				+ "\"address\": { \"zipCode\": \"01097\", \"city\": \"Dresden\" }, "
+				+ "\"addresses\": [ { \"zipCode\": \"01097\", \"city\": \"Dresden\" } ]"
+				+ "}";
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class, new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)));
+
+		assertThat(optionalCustomer.getFirstname()).contains("Dave");
+		assertThat(optionalCustomer.getMissing()).isEmpty();
+		assertThat(optionalCustomer.getNullname()).isEmpty();
+		assertThat(optionalCustomer.getAge()).contains(42);
+		assertThat(optionalCustomer.getActive()).contains(true);
+		
+		assertThat(optionalCustomer.getAddress()).isPresent().hasValueSatisfying(address -> {
+			assertThat(address.getZipCode()).isEqualTo("01097");
+		});
+		
+		assertThat(optionalCustomer.getAddressProjection()).isPresent().hasValueSatisfying(address -> {
+			assertThat(address.getZipCode()).isEqualTo("01097");
+		});
+
+		assertThat(optionalCustomer.getAddresses()).isPresent().hasValueSatisfying(addresses -> {
+			assertThat(addresses).hasSize(1);
+			assertThat(addresses.get(0).getZipCode()).isEqualTo("01097");
+		});
+
+		assertThat(optionalCustomer.getAddressProjections()).isPresent().hasValueSatisfying(addresses -> {
+			assertThat(addresses).hasSize(1);
+			assertThat(addresses.get(0).getZipCode()).isEqualTo("01097");
+		});
+		
+		assertThat(optionalCustomer.getMultiPathMissingFirst()).contains("Dave");
+		assertThat(optionalCustomer.getMultiPathNullFirst()).isEmpty();
+	}
+
+	@Test
+	void exceptionNotSwallowedForMappingError() {
+		var json = "{\"age\": \"not-a-number\"}";
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class, new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)));
+		
+		assertThatThrownBy(() -> optionalCustomer.getAge())
+				.isInstanceOf(com.jayway.jsonpath.spi.mapper.MappingException.class);
+	}
+
+	interface OptionalCustomer {
+
+		java.util.Optional<String> getFirstname();
+
+		java.util.Optional<String> getMissing();
+
+		java.util.Optional<String> getNullname();
+
+		java.util.Optional<Integer> getAge();
+
+		java.util.Optional<Boolean> getActive();
+
+		java.util.Optional<Address> getAddress();
+
+		@JsonPath("$.address")
+		java.util.Optional<AddressProjection> getAddressProjection();
+
+		java.util.Optional<List<Address>> getAddresses();
+
+		@JsonPath("$.addresses")
+		java.util.Optional<List<AddressProjection>> getAddressProjections();
+
+		@JsonPath({ "$.missing", "$.firstname" })
+		java.util.Optional<String> getMultiPathMissingFirst();
+
+		@JsonPath({ "$.nullname", "$.firstname" })
+		java.util.Optional<String> getMultiPathNullFirst();
+	}
+
 	interface Customer {
 
 		String getFirstname();
