@@ -22,7 +22,9 @@ import static org.mockito.Mockito.*;
 
 import java.io.Serializable;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,6 +32,11 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
+
+import org.springframework.beans.factory.BeanFactory;
+import org.springframework.core.metrics.ApplicationStartup;
+import org.springframework.core.metrics.StartupStep;
 
 import org.aopalliance.intercept.MethodInvocation;
 import org.jspecify.annotations.NonNull;
@@ -38,6 +45,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -51,6 +59,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.projection.DefaultMethodInvokingMethodInterceptor;
 import org.springframework.data.projection.ProjectionFactory;
 import org.springframework.data.querydsl.QuerydslPredicateExecutor;
 import org.springframework.data.repository.CrudRepository;
@@ -134,6 +143,34 @@ class RepositoryFactorySupportUnitTests {
 		verify(repositoryPostProcessor, times(1)).postProcess(any(ProxyFactory.class), any(RepositoryInformation.class));
 	}
 
+	@Test
+	void repositoryProxyPostProcessorSeesExpectedProxyFactoryState() {
+
+		factory.addRepositoryProxyPostProcessor((proxyFactory, repositoryInformation) -> {
+
+			try {
+				assertThat(proxyFactory.getTargetSource().getTarget()).isSameAs(backingRepo);
+			} catch (Exception e) {
+				throw new AssertionError(e);
+			}
+			assertThat(proxyFactory.getProxiedInterfaces()).containsExactly(ObjectRepository.class, Repository.class,
+					TransactionalProxy.class);
+			assertThat(repositoryInformation.getRepositoryInterface()).isEqualTo(ObjectRepository.class);
+
+			List<Class<?>> adviceTypes = new ArrayList<>();
+			for (var advisor : proxyFactory.getAdvisors()) {
+				adviceTypes.add(advisor.getAdvice().getClass());
+			}
+
+			assertThat(adviceTypes).contains(MethodInvocationValidator.class)
+					.doesNotContain(DefaultMethodInvokingMethodInterceptor.class,
+							QueryExecutorMethodInterceptor.class,
+							RepositoryFactorySupport.ImplementationMethodExecutionInterceptor.class);
+		});
+
+		factory.getRepository(ObjectRepository.class);
+	}
+
 	@Test // DATACMNS-1764
 	void routesCallToRedeclaredMethodIntoTarget() {
 
@@ -164,6 +201,23 @@ class RepositoryFactorySupportUnitTests {
 
 		verify(customImplementation, times(1)).findById(1);
 		verify(backingRepo, times(0)).findById(1);
+	}
+
+	@Test
+	void keepsAdviceOrderingForDefaultQueryAndFragmentMethods() {
+
+		when(factory.queryOne.execute(any(Object[].class))).thenReturn("query-result");
+		when(customImplementation.findById(1)).thenReturn("fragment-result");
+
+		var repository = factory.getRepository(ObjectRepository.class, customImplementation);
+
+		assertThat(repository.staticMethodDelegate()).isEqualTo("OK");
+		assertThat(repository.findMetadataByLastname()).isEqualTo("query-result");
+		assertThat(repository.findById(1)).isEqualTo("fragment-result");
+
+		verify(factory.queryOne).execute(any(Object[].class));
+		verify(customImplementation).findById(1);
+		verifyNoInteractions(backingRepo);
 	}
 
 	@Test
@@ -295,6 +349,42 @@ class RepositoryFactorySupportUnitTests {
 		assertThat(metadata.methodInvocation().getMethod().getName()).isEqualTo("findMetadataByLastname");
 	}
 
+	@Test // GH-3090
+	void doesNotExposeRepositoryMetadataByDefault() {
+
+		when(factory.queryOne.execute(any(Object[].class))).then(invocation -> RepositoryMethodContextHolder.getContext());
+
+		var repository = factory.getRepository(ObjectRepository.class);
+
+		assertThatThrownBy(repository::findMetadataByLastname).isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("Cannot find current repository method");
+	}
+
+	@Test // GH-3090
+	void restoresRepositoryMetadataAfterInvocationFailure() {
+
+		var previousContext = mock(RepositoryMethodContext.class);
+		RepositoryMethodContextHolder.setContext(previousContext);
+
+		try {
+			when(factory.queryOne.execute(any(Object[].class))).then(invocation -> {
+				assertThat(RepositoryMethodContextHolder.getContext().getMethod().getName())
+						.isEqualTo("findMetadataByLastname");
+				throw new IllegalStateException("boom");
+			});
+
+			factory.setExposeMetadata(true);
+
+			var repository = factory.getRepository(ObjectRepository.class);
+
+			assertThatThrownBy(repository::findMetadataByLastname).isInstanceOf(IllegalStateException.class)
+					.hasMessageContaining("boom");
+			assertThat(RepositoryMethodContextHolder.getContext()).isSameAs(previousContext);
+		} finally {
+			RepositoryMethodContextHolder.setContext(null);
+		}
+	}
+
 	@Test
 	void cachesRepositoryInformation() {
 
@@ -303,10 +393,12 @@ class RepositoryFactorySupportUnitTests {
 		repository1.findByFoo(null);
 		repository2.deleteAll();
 
+		RepositoryFragments fragments = RepositoryFragments.just(backingRepo);
+		RepositoryMetadata metadata = factory.getRepositoryMetadata(ObjectAndQuerydslRepository.class);
+		RepositoryInformation information = factory.getRepositoryInformation(metadata, fragments);
+
 		for (int i = 0; i < 10; i++) {
-			RepositoryFragments fragments = RepositoryFragments.just(backingRepo);
-			RepositoryMetadata metadata = factory.getRepositoryMetadata(ObjectAndQuerydslRepository.class);
-			factory.getRepositoryInformation(metadata, fragments);
+			assertThat(factory.getRepositoryInformation(metadata, fragments)).isSameAs(information);
 		}
 
 		Map<Object, RepositoryInformation> cache = (Map) ReflectionTestUtils.getField(factory,
@@ -488,9 +580,28 @@ class RepositoryFactorySupportUnitTests {
 	@Test // DATACMNS-1832
 	void callsApplicationStartupOnRepositoryInitialization() {
 
+		Map<String, StartupStep> steps = new LinkedHashMap<>();
+		ApplicationStartup startup = mock(ApplicationStartup.class);
+		when(startup.start(anyString())).then(invocation -> {
+			String name = invocation.getArgument(0);
+			StartupStep step = mock(StartupStep.class, name);
+			when(step.tag(anyString(), anyString())).thenReturn(step);
+			when(step.tag(anyString(), ArgumentMatchers.<Supplier<String>> any())).thenReturn(step);
+			steps.put(name, step);
+			return step;
+		});
+
+		BeanFactory beanFactory = mock(BeanFactory.class);
+		when(beanFactory.getBean(ApplicationStartup.class)).thenReturn(startup);
+		factory.setBeanFactory(beanFactory);
+		factory.setRepositoryBaseClass(CustomRepositoryBaseClass.class);
+		factory.addRepositoryProxyPostProcessor((proxyFactory, repositoryInformation) -> {});
+
 		factory.getRepository(ObjectRepository.class, backingRepo);
 
-		var startup = factory.getApplicationStartup();
+		assertThat(steps).containsOnlyKeys("spring.data.repository.init", "spring.data.repository.metadata",
+				"spring.data.repository.composition", "spring.data.repository.target", "spring.data.repository.proxy",
+				"spring.data.repository.postprocessors", "spring.data.repository.postprocessor");
 
 		var orderedInvocation = Mockito.inOrder(startup);
 		orderedInvocation.verify(startup).start("spring.data.repository.init");
@@ -498,6 +609,20 @@ class RepositoryFactorySupportUnitTests {
 		orderedInvocation.verify(startup).start("spring.data.repository.composition");
 		orderedInvocation.verify(startup).start("spring.data.repository.target");
 		orderedInvocation.verify(startup).start("spring.data.repository.proxy");
+		orderedInvocation.verify(startup).start("spring.data.repository.postprocessors");
+		orderedInvocation.verify(startup).start("spring.data.repository.postprocessor");
+
+		for (StartupStep step : steps.values()) {
+			verify(step).tag("repository", ObjectRepository.class.getName());
+			verify(step).end();
+		}
+
+		verify(steps.get("spring.data.repository.init")).tag("baseClass", CustomRepositoryBaseClass.class.getName());
+		verify(steps.get("spring.data.repository.composition")).tag("fragment.count", "1");
+		verify(steps.get("spring.data.repository.composition")).tag(eq("fragments"),
+				ArgumentMatchers.<Supplier<String>> any());
+		verify(steps.get("spring.data.repository.target")).tag("target", backingRepo.getClass().getName());
+		verify(steps.get("spring.data.repository.postprocessor")).tag(eq("type"), anyString());
 	}
 
 	@Test // GH-2341

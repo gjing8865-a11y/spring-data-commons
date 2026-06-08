@@ -315,6 +315,31 @@ public abstract class RepositoryFactorySupport
 		Assert.notNull(fragments, "RepositoryFragments must not be null");
 
 		ApplicationStartup applicationStartup = getStartup();
+		StartupStep repositoryInit = startRepositoryInit(applicationStartup, repositoryInterface);
+		T repository;
+
+		try {
+			RepositoryMetadata metadata = resolveRepositoryMetadata(applicationStartup, repositoryInterface);
+			RepositoryCompositionState composition = resolveRepositoryComposition(metadata, fragments, applicationStartup,
+					repositoryInterface);
+			RepositoryTargetState repositoryTarget = createRepositoryTarget(composition.information(),
+					composition.composition(), applicationStartup, repositoryInterface);
+
+			repository = (T) createRepositoryProxy(repositoryInterface, fragments, metadata, composition.information(),
+					repositoryTarget, applicationStartup);
+		} finally {
+			repositoryInit.end();
+		}
+
+		if (logger.isDebugEnabled()) {
+			logger
+					.debug(LogMessage.format("Finished creation of repository instance for %s.", repositoryInterface.getName()));
+		}
+
+		return repository;
+	}
+
+	private StartupStep startRepositoryInit(ApplicationStartup applicationStartup, Class<?> repositoryInterface) {
 
 		StartupStep repositoryInit = onEvent(applicationStartup, "spring.data.repository.init", repositoryInterface);
 
@@ -322,53 +347,92 @@ public abstract class RepositoryFactorySupport
 			repositoryInit.tag("baseClass", repositoryBaseClass.getName());
 		}
 
+		return repositoryInit;
+	}
+
+	private RepositoryMetadata resolveRepositoryMetadata(ApplicationStartup applicationStartup,
+			Class<?> repositoryInterface) {
+
 		StartupStep repositoryMetadataStep = onEvent(applicationStartup, "spring.data.repository.metadata",
 				repositoryInterface);
-		RepositoryMetadata metadata = getRepositoryMetadata(repositoryInterface);
-		repositoryMetadataStep.end();
+
+		try {
+			return getRepositoryMetadata(repositoryInterface);
+		} finally {
+			repositoryMetadataStep.end();
+		}
+	}
+
+	private RepositoryCompositionState resolveRepositoryComposition(RepositoryMetadata metadata,
+			RepositoryFragments fragments, ApplicationStartup applicationStartup, Class<?> repositoryInterface) {
 
 		StartupStep repositoryCompositionStep = onEvent(applicationStartup, "spring.data.repository.composition",
 				repositoryInterface);
 		repositoryCompositionStep.tag("fragment.count", String.valueOf(fragments.size()));
 
-		RepositoryStub stub = getRepositoryStub(metadata, fragments);
-		RepositoryComposition composition = stub.composition();
-		RepositoryInformation information = stub.information();
+		try {
+			RepositoryStub stub = getRepositoryStub(metadata, fragments);
+			RepositoryComposition composition = stub.composition();
+			repositoryCompositionStep.tag("fragments", () -> toFragmentTag(composition));
+			return new RepositoryCompositionState(stub.information(), composition);
+		} finally {
+			repositoryCompositionStep.end();
+		}
+	}
 
-		repositoryCompositionStep.tag("fragments", () -> {
-
-			StringBuilder fragmentsTag = new StringBuilder();
-
-			for (RepositoryFragment<?> fragment : composition.getFragments()) {
-
-				if (!fragmentsTag.isEmpty()) {
-					fragmentsTag.append(";");
-				}
-
-				fragmentsTag.append(fragment.getSignatureContributor().getName());
-				fragmentsTag.append(fragment.getImplementation().map(it -> ":" + it.getClass().getName()).orElse(""));
-			}
-
-			return fragmentsTag.toString();
-		});
-
-		repositoryCompositionStep.end();
+	private RepositoryTargetState createRepositoryTarget(RepositoryInformation information,
+			RepositoryComposition composition, ApplicationStartup applicationStartup, Class<?> repositoryInterface) {
 
 		StartupStep repositoryTargetStep = onEvent(applicationStartup, "spring.data.repository.target",
 				repositoryInterface);
-		Object target = getTargetRepository(information);
 
-		repositoryTargetStep.tag("target", target.getClass().getName());
-		repositoryTargetStep.end();
+		try {
+			Object target = getTargetRepository(information);
+			repositoryTargetStep.tag("target", target.getClass().getName());
 
-		RepositoryComposition compositionToUse = composition.append(RepositoryFragment.implemented(target));
-		validate(information, compositionToUse);
+			RepositoryComposition compositionToUse = composition.append(RepositoryFragment.implemented(target));
+			validate(information, compositionToUse);
 
-		// Create proxy
+			return new RepositoryTargetState(target, compositionToUse);
+		} finally {
+			repositoryTargetStep.end();
+		}
+	}
+
+	private Object createRepositoryProxy(Class<?> repositoryInterface, RepositoryFragments fragments,
+			RepositoryMetadata metadata, RepositoryInformation information, RepositoryTargetState repositoryTarget,
+			ApplicationStartup applicationStartup) {
+
 		StartupStep repositoryProxyStep = onEvent(applicationStartup, "spring.data.repository.proxy", repositoryInterface);
+
+		try {
+			ProxyFactory result = createRepositoryProxyFactory(repositoryInterface, fragments, metadata, information,
+					repositoryTarget, applicationStartup);
+			return result.getProxy(classLoader);
+		} finally {
+			repositoryProxyStep.end();
+		}
+	}
+
+	private ProxyFactory createRepositoryProxyFactory(Class<?> repositoryInterface, RepositoryFragments fragments,
+			RepositoryMetadata metadata, RepositoryInformation information, RepositoryTargetState repositoryTarget,
+			ApplicationStartup applicationStartup) {
+
 		ProxyFactory result = new ProxyFactory();
-		result.setTarget(target);
+		result.setTarget(repositoryTarget.target());
 		result.setInterfaces(repositoryInterface, Repository.class, TransactionalProxy.class);
+
+		registerMethodInvocationValidator(result, repositoryInterface);
+		registerExposeMetadataInterceptor(result, repositoryInterface, metadata, fragments);
+		invokeRepositoryProxyPostProcessors(result, information, repositoryInterface, applicationStartup);
+		registerDefaultMethodInvokingMethodInterceptor(result, repositoryInterface);
+		registerQueryExecutorMethodInterceptor(result, information);
+		registerImplementationMethodExecutionInterceptor(result, information, repositoryTarget.compositionToUse());
+
+		return result;
+	}
+
+	private void registerMethodInvocationValidator(ProxyFactory result, Class<?> repositoryInterface) {
 
 		if (NullnessMethodInvocationValidator.supports(repositoryInterface)) {
 			if (logger.isTraceEnabled()) {
@@ -376,6 +440,10 @@ public abstract class RepositoryFactorySupport
 			}
 			result.addAdvice(new MethodInvocationValidator());
 		}
+	}
+
+	private void registerExposeMetadataInterceptor(ProxyFactory result, Class<?> repositoryInterface,
+			RepositoryMetadata metadata, RepositoryFragments fragments) {
 
 		if (this.exposeMetadata || shouldExposeMetadata(fragments)) {
 			if (logger.isTraceEnabled()) {
@@ -384,20 +452,36 @@ public abstract class RepositoryFactorySupport
 			result.addAdvice(new ExposeMetadataInterceptor(metadata));
 			result.addAdvisor(ExposeInvocationInterceptor.ADVISOR);
 		}
+	}
 
-		if (!postProcessors.isEmpty()) {
-			StartupStep repositoryPostprocessorsStep = onEvent(applicationStartup, "spring.data.repository.postprocessors",
-					repositoryInterface);
-			postProcessors.forEach(processor -> {
+	private void invokeRepositoryProxyPostProcessors(ProxyFactory result, RepositoryInformation information,
+			Class<?> repositoryInterface, ApplicationStartup applicationStartup) {
 
+		if (postProcessors.isEmpty()) {
+			return;
+		}
+
+		StartupStep repositoryPostprocessorsStep = onEvent(applicationStartup, "spring.data.repository.postprocessors",
+				repositoryInterface);
+
+		try {
+			for (RepositoryProxyPostProcessor processor : postProcessors) {
 				StartupStep singlePostProcessor = onEvent(applicationStartup, "spring.data.repository.postprocessor",
 						repositoryInterface);
-				singlePostProcessor.tag("type", processor.getClass().getName());
-				processor.postProcess(result, information);
-				singlePostProcessor.end();
-			});
+
+				try {
+					singlePostProcessor.tag("type", processor.getClass().getName());
+					processor.postProcess(result, information);
+				} finally {
+					singlePostProcessor.end();
+				}
+			}
+		} finally {
 			repositoryPostprocessorsStep.end();
 		}
+	}
+
+	private void registerDefaultMethodInvokingMethodInterceptor(ProxyFactory result, Class<?> repositoryInterface) {
 
 		if (DefaultMethodInvokingMethodInterceptor.hasDefaultMethods(repositoryInterface)) {
 			if (logger.isTraceEnabled()) {
@@ -406,26 +490,37 @@ public abstract class RepositoryFactorySupport
 			}
 			result.addAdvice(new DefaultMethodInvokingMethodInterceptor());
 		}
+	}
+
+	private void registerQueryExecutorMethodInterceptor(ProxyFactory result, RepositoryInformation information) {
 
 		Optional<QueryLookupStrategy> queryLookupStrategy = getQueryLookupStrategy(queryLookupStrategyKey,
 				getValueExpressionDelegate());
 		result.addAdvice(new QueryExecutorMethodInterceptor(information, getProjectionFactory(),
-				queryLookupStrategy.orElse(null),
-				namedQueries, queryPostProcessors, methodInvocationListeners));
+				queryLookupStrategy.orElse(null), namedQueries, queryPostProcessors, methodInvocationListeners));
+	}
 
+	private void registerImplementationMethodExecutionInterceptor(ProxyFactory result,
+			RepositoryInformation information, RepositoryComposition compositionToUse) {
 		result.addAdvice(
 				new ImplementationMethodExecutionInterceptor(information, compositionToUse, methodInvocationListeners));
+	}
 
-		T repository = (T) result.getProxy(classLoader);
-		repositoryProxyStep.end();
-		repositoryInit.end();
+	private static String toFragmentTag(RepositoryComposition composition) {
 
-		if (logger.isDebugEnabled()) {
-			logger
-					.debug(LogMessage.format("Finished creation of repository instance for %s.", repositoryInterface.getName()));
+		StringBuilder fragmentsTag = new StringBuilder();
+
+		for (RepositoryFragment<?> fragment : composition.getFragments()) {
+
+			if (!fragmentsTag.isEmpty()) {
+				fragmentsTag.append(";");
+			}
+
+			fragmentsTag.append(fragment.getSignatureContributor().getName());
+			fragmentsTag.append(fragment.getImplementation().map(it -> ":" + it.getClass().getName()).orElse(""));
 		}
 
-		return repository;
+		return fragmentsTag.toString();
 	}
 
 	ValueExpressionDelegate getValueExpressionDelegate() {
@@ -749,6 +844,14 @@ public abstract class RepositoryFactorySupport
 		public List<QueryMethod> getQueryMethods() {
 			return this.queryMethods;
 		}
+	}
+
+	private record RepositoryCompositionState(RepositoryInformation information, RepositoryComposition composition) {
+
+	}
+
+	private record RepositoryTargetState(Object target, RepositoryComposition compositionToUse) {
+
 	}
 
 	/**
