@@ -20,8 +20,10 @@ import static org.assertj.core.api.Assertions.*;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.ByteArrayInputStream;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
@@ -34,6 +36,7 @@ import org.springframework.util.ObjectUtils;
 
 import com.jayway.jsonpath.spi.json.JsonProvider;
 import com.jayway.jsonpath.spi.mapper.MappingProvider;
+import com.jayway.jsonpath.spi.mapper.MappingException;
 
 /**
  * Unit tests for {@link JsonProjectingMethodInterceptorFactory}.
@@ -52,6 +55,11 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 	void setUp() {
 
 		var json = "{\"firstname\" : \"Dave\", "//
+				+ "\"age\" : 42, "//
+				+ "\"active\" : true, "//
+				+ "\"nullField\" : null, "//
+				+ "\"explicitNullName\" : null, "//
+				+ "\"optionalFirstnameDefaultPath\" : \"Dave\", "//
 				+ "\"address\" : { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" }," //
 				+ "\"addresses\" : [ { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" }, { \"zipCode\" : \"69469\", \"city\" : \"Weinheim\" }]"
 				+ " }";
@@ -171,6 +179,85 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 		assertThat(projection.users()).hasSize(2);
 	}
 
+	@Test
+	void optionalSimplePropertyPresent() {
+		assertThat(customer.getOptionalFirstname()).hasValue("Dave");
+	}
+
+	@Test
+	void optionalSimplePropertyMissing() {
+		assertThat(customer.getOptionalMissing()).isEmpty();
+	}
+
+	@Test
+	void optionalSimplePropertyExplicitlyNull() {
+		assertThat(customer.getOptionalNullField()).isEmpty();
+	}
+
+	@Test
+	void optionalNumericPropertyConversion() {
+		assertThat(customer.getOptionalAge()).hasValue(42);
+	}
+
+	@Test
+	void optionalBooleanPropertyConversion() {
+		assertThat(customer.getOptionalActive()).hasValue(true);
+	}
+
+	@Test
+	void optionalComplexDtoProperty() {
+		assertThat(customer.getOptionalAddress()).isPresent();
+		assertThat(customer.getOptionalAddress().get()).isEqualTo(new Address("01097", "Dresden"));
+	}
+
+	@Test
+	void optionalNestedProjectionProperty() {
+		assertThat(customer.getOptionalAddressProjection()).isPresent();
+		assertThat(customer.getOptionalAddressProjection().get().getCity()).isEqualTo("Dresden");
+	}
+
+	@Test
+	void optionalListOfDtos() {
+		assertThat(customer.getOptionalAddresses()).isPresent();
+		assertThat(customer.getOptionalAddresses().get()).hasSize(2);
+		assertThat(customer.getOptionalAddresses().get().get(0)).isEqualTo(new Address("01097", "Dresden"));
+	}
+
+	@Test
+	void optionalListOfNestedProjections() {
+		assertThat(customer.getOptionalAddressProjections()).isPresent();
+		assertThat(customer.getOptionalAddressProjections().get()).hasSize(2);
+		assertThat(customer.getOptionalAddressProjections().get().get(0).getCity()).isEqualTo("Dresden");
+	}
+
+	@Test
+	void optionalDefaultPropertyPathWithoutAnnotation() {
+		assertThat(customer.getOptionalFirstnameDefaultPath()).hasValue("Dave");
+	}
+
+	@Test
+	void optionalMultiPathFallbackFirstMissing() {
+		assertThat(customer.getOptionalNameFallback()).hasValue("Dave");
+	}
+
+	@Test
+	void optionalMultiPathFallbackFirstPathIsNull() {
+		assertThat(customer.getOptionalNameFallbackNullFirst()).isEmpty();
+	}
+
+	@Test
+	void nonOptionalBehaviorRemainsUnchanged() {
+		assertThat(customer.getFirstname()).isEqualTo("Dave");
+		assertThat(customer.getAddress()).isEqualTo(new Address("01097", "Dresden"));
+		assertThat(customer.getAddresses()).hasSize(2);
+	}
+
+	@Test
+	void mappingExceptionNotSwallowedByOptionalHandling() {
+		assertThatThrownBy(() -> customer.getOptionalBadConversion())
+				.satisfies(ex -> assertThat(ex).isInstanceOf(MappingException.class));
+	}
+
 	interface Customer {
 
 		String getFirstname();
@@ -208,6 +295,44 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 
 		@JsonPath("$..city")
 		List<String> getNestedCities();
+
+		@JsonPath("$.firstname")
+		Optional<String> getOptionalFirstname();
+
+		Optional<String> getOptionalFirstnameDefaultPath();
+
+		@JsonPath("$.missingField")
+		Optional<String> getOptionalMissing();
+
+		@JsonPath("$.nullField")
+		Optional<String> getOptionalNullField();
+
+		@JsonPath("$.age")
+		Optional<Integer> getOptionalAge();
+
+		@JsonPath("$.active")
+		Optional<Boolean> getOptionalActive();
+
+		@JsonPath("$.address")
+		Optional<Address> getOptionalAddress();
+
+		@JsonPath("$.address")
+		Optional<AddressProjection> getOptionalAddressProjection();
+
+		@JsonPath("$.addresses")
+		Optional<List<Address>> getOptionalAddresses();
+
+		@JsonPath("$.addresses")
+		Optional<List<AddressProjection>> getOptionalAddressProjections();
+
+		@JsonPath({ "$.missingName", "$.firstname" })
+		Optional<String> getOptionalNameFallback();
+
+		@JsonPath({ "$.explicitNullName", "$.firstname" })
+		Optional<String> getOptionalNameFallbackNullFirst();
+
+		@JsonPath("$.firstname")
+		Optional<BigDecimal> getOptionalBadConversion();
 	}
 
 	interface AddressProjection {

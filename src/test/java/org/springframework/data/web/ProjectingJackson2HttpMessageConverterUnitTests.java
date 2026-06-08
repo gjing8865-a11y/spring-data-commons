@@ -17,6 +17,15 @@ package org.springframework.data.web;
 
 import static org.assertj.core.api.Assertions.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Optional;
+
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 
@@ -80,4 +89,90 @@ class ProjectingJackson2HttpMessageConverterUnitTests {
 	}
 
 	class ConcreteController extends BaseController<AbstractDto> {}
+
+	@Test
+	void jackson2ConverterCanReadProjectedPayloadWithOptionalGetter() throws IOException {
+		var json = "{\"firstname\" : \"Dave\", \"age\" : 42, \"active\" : true, \"nullField\" : null, "
+				+ "\"address\" : { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" }, "
+				+ "\"addresses\" : [ { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" } ] }";
+
+		byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+		var inputMessage = new org.springframework.http.HttpInputMessage() {
+			@Override
+			public java.io.InputStream getBody() {
+				return new ByteArrayInputStream(bytes);
+			}
+			@Override
+			public org.springframework.http.HttpHeaders getHeaders() {
+				return new org.springframework.http.HttpHeaders();
+			}
+		};
+		var result = converter.read(OptionalPayload.class, null, inputMessage);
+
+		assertThat(result).isInstanceOf(OptionalPayload.class);
+		var projection = (OptionalPayload) result;
+		assertThat(projection.getFirstname()).hasValue("Dave");
+		assertThat(projection.getAge()).hasValue(42);
+		assertThat(projection.getActive()).hasValue(true);
+		assertThat(projection.getNullField()).isEmpty();
+		assertThat(projection.getMissingField()).isEmpty();
+		assertThat(projection.getAddress()).isPresent();
+		assertThat(projection.getAddress().get().getZipCode()).isEqualTo("01097");
+		assertThat(projection.getAddresses()).isPresent();
+		assertThat(projection.getAddresses().get()).hasSize(1);
+		assertThat(projection.getAddressProjection()).isPresent();
+		assertThat(projection.getAddressProjection().get().getCity()).isEqualTo("Dresden");
+	}
+
+	@Test
+	void unannotatedInterfaceIsStillNotReadableByJackson2Converter() {
+		assertThat(converter.canRead(UnannotatedInterface.class, null, ANYTHING_JSON)).isFalse();
+	}
+
+	@ProjectedPayload
+	interface OptionalPayload {
+
+		Optional<String> getFirstname();
+
+		Optional<Integer> getAge();
+
+		Optional<Boolean> getActive();
+
+		Optional<String> getNullField();
+
+		Optional<String> getMissingField();
+
+		Optional<AddressDto> getAddress();
+
+		Optional<List<AddressDto>> getAddresses();
+
+		@JsonPath("$.address")
+		Optional<AddressProjection> getAddressProjection();
+
+		interface AddressProjection {
+			String getCity();
+		}
+	}
+
+	static class AddressDto {
+		private String zipCode, city;
+
+		public AddressDto() {}
+
+		public String getZipCode() {
+			return zipCode;
+		}
+
+		public void setZipCode(String zipCode) {
+			this.zipCode = zipCode;
+		}
+
+		public String getCity() {
+			return city;
+		}
+
+		public void setCity(String city) {
+			this.city = city;
+		}
+	}
 }

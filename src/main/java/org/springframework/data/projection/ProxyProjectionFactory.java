@@ -185,8 +185,8 @@ class ProxyProjectionFactory implements ProjectionFactory, BeanClassLoaderAware 
 	 */
 	private MethodInterceptor getMethodInterceptor(Object source, Class<?> projectionType) {
 
-		MethodInterceptor propertyInvocationInterceptor = getFactoryFor(source, projectionType)
-				.createMethodInterceptor(source, projectionType);
+		MethodInterceptorFactory factory = getFactoryFor(source, projectionType);
+		MethodInterceptor propertyInvocationInterceptor = factory.createMethodInterceptor(this, source, projectionType);
 
 		return new ProjectingMethodInterceptor(this,
 				postProcessAccessorInterceptor(propertyInvocationInterceptor, source, projectionType), CONVERSION_SERVICE);

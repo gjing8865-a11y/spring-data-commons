@@ -26,6 +26,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.aopalliance.intercept.MethodInterceptor;
 import org.aopalliance.intercept.MethodInvocation;
@@ -36,6 +37,7 @@ import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.data.core.TypeInformation;
 import org.springframework.data.projection.Accessor;
 import org.springframework.data.projection.MethodInterceptorFactory;
+import org.springframework.data.projection.ProjectionFactory;
 import org.springframework.util.Assert;
 
 import com.jayway.jsonpath.Configuration;
@@ -101,7 +103,16 @@ public class JsonProjectingMethodInterceptorFactory implements MethodInterceptor
 		DocumentContext context = source instanceof InputStream ? this.context.parse((InputStream) source)
 				: this.context.parse(source);
 
-		return new InputMessageProjecting(context);
+		return new InputMessageProjecting(context, null);
+	}
+
+	@Override
+	public MethodInterceptor createMethodInterceptor(ProjectionFactory factory, Object source, Class<?> targetType) {
+
+		DocumentContext context = source instanceof InputStream ? this.context.parse((InputStream) source)
+				: this.context.parse(source);
+
+		return new InputMessageProjecting(context, factory);
 	}
 
 	@Override
@@ -131,7 +142,7 @@ public class JsonProjectingMethodInterceptorFactory implements MethodInterceptor
 		return false;
 	}
 
-	private record InputMessageProjecting(DocumentContext context) implements MethodInterceptor {
+	private record InputMessageProjecting(DocumentContext context, @Nullable ProjectionFactory projectionFactory) implements MethodInterceptor {
 
 		@Override
 		public @Nullable Object invoke(MethodInvocation invocation) throws Throwable {
@@ -155,6 +166,12 @@ public class JsonProjectingMethodInterceptorFactory implements MethodInterceptor
 			TypeInformation<?> returnType = TypeInformation.fromReturnTypeOf(method);
 			ResolvableType type = ResolvableType.forMethodReturnType(method);
 			boolean isCollectionResult = type.getRawClass() != null && Collection.class.isAssignableFrom(type.getRawClass());
+			boolean isOptional = type.getRawClass() == Optional.class;
+
+			if (isOptional) {
+				return invokeOptional(method, returnType, type);
+			}
+
 			type = isCollectionResult ? type : ResolvableType.forClassWithGenerics(List.class, type);
 
 			Iterable<String> jsonPaths = getJsonPaths(method);
@@ -188,6 +205,116 @@ public class JsonProjectingMethodInterceptorFactory implements MethodInterceptor
 			}
 
 			return null;
+		}
+
+		@SuppressWarnings("unchecked")
+		private Object invokeOptional(Method method, TypeInformation<?> returnType, ResolvableType optionalType) {
+
+			ResolvableType actualType = optionalType.getGeneric(0);
+			Class<?> actualRawClass = actualType.resolve();
+			boolean isCollectionResult = actualRawClass != null && Collection.class.isAssignableFrom(actualRawClass);
+			boolean isInterfaceProjection = !isCollectionResult && actualRawClass != null && actualRawClass.isInterface();
+			Class<?> elementProjectionType = isCollectionResult ? actualType.getGeneric(0).resolve(null) : null;
+			boolean isCollectionOfInterfaceProjection = isCollectionResult && elementProjectionType != null
+					&& elementProjectionType.isInterface();
+
+			ResolvableType targetType = isCollectionResult ? actualType
+					: ResolvableType.forClassWithGenerics(List.class, actualType);
+
+			Iterable<String> jsonPaths = getJsonPaths(method);
+
+			for (String jsonPath : jsonPaths) {
+
+				try {
+
+					if (isInterfaceProjection) {
+						List<?> result = context.read(jsonPath);
+
+						if (result.isEmpty()) {
+							continue;
+						}
+
+						Object nested = result.get(0);
+
+						if (nested == null) {
+							return Optional.empty();
+						}
+
+						return Optional.of(projectIfNecessary(nested, actualRawClass));
+					}
+
+					if (isCollectionOfInterfaceProjection) {
+						List<?> result = context.read(jsonPath);
+
+						if (result.isEmpty()) {
+							continue;
+						}
+
+						Object nested = result.get(0);
+
+						if (nested == null) {
+							return Optional.empty();
+						}
+
+						if (nested instanceof Collection) {
+							return Optional.of(projectCollection((Collection<?>) nested, elementProjectionType));
+						}
+
+						return Optional.of(projectCollection(result, elementProjectionType));
+					}
+
+					boolean definitePath = JsonPath.isPathDefinite(jsonPath);
+					ResolvableType readType = isCollectionResult && definitePath
+							? ResolvableType.forClassWithGenerics(List.class, targetType)
+							: targetType;
+
+					List<?> result = (List<?>) context.read(jsonPath, new ResolvableTypeRef(readType));
+
+					if (isCollectionResult && definitePath) {
+						result = (List<?>) result.get(0);
+					}
+
+					if (result.isEmpty()) {
+						continue;
+					}
+
+					Object value = result.get(0);
+
+					if (value == null) {
+						return Optional.empty();
+					}
+
+					return isCollectionResult ? Optional.of(result) : Optional.of(value);
+
+				} catch (PathNotFoundException o_O) {
+					// continue with next path
+				}
+			}
+
+			return Optional.empty();
+		}
+
+		@SuppressWarnings("unchecked")
+		private Object projectIfNecessary(Object source, Class<?> targetType) {
+			if (targetType.isInstance(source)) {
+				return source;
+			}
+			if (projectionFactory != null && targetType.isInterface()) {
+				return projectionFactory.createProjection(targetType, source);
+			}
+			return source;
+		}
+
+		@SuppressWarnings("unchecked")
+		private Collection<?> projectCollection(Collection<?> sources, Class<?> elementType) {
+			if (projectionFactory == null || !elementType.isInterface()) {
+				return sources;
+			}
+			Collection<Object> result = new java.util.ArrayList<>(sources.size());
+			for (Object source : sources) {
+				result.add(projectIfNecessary(source, elementType));
+			}
+			return result;
 		}
 
 		/**

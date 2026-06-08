@@ -39,6 +39,20 @@ public interface MethodInterceptorFactory {
 	MethodInterceptor createMethodInterceptor(Object source, Class<?> targetType);
 
 	/**
+	 * Returns the {@link MethodInterceptor} to be used for the given source object and target type, with access to the
+	 * {@link ProjectionFactory} for creating nested projections.
+	 *
+	 * @param factory will never be {@literal null}.
+	 * @param source will never be {@literal null}.
+	 * @param targetType will never be {@literal null}.
+	 * @return
+	 * @since 4.1
+	 */
+	default MethodInterceptor createMethodInterceptor(ProjectionFactory factory, Object source, Class<?> targetType) {
+		return createMethodInterceptor(source, targetType);
+	}
+
+	/**
 	 * Returns whether the current factory is supposed to be used to create a {@link MethodInterceptor} for proxy of the
 	 * given target type.
 	 *
