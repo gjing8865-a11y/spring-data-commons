@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.data.mapping.model.ReflectionEntityInstantiator.*;
 
+import java.lang.reflect.Array;
 import java.util.Arrays;
 import java.util.List;
 
@@ -59,8 +60,9 @@ class ReflectionEntityInstantiatorUnitTests<P extends PersistentProperty<P>> {
 	@Test
 	void instantiatesArrayCorrectly() {
 
-		doReturn(String[][].class).when(entity).getType();
-		INSTANCE.createInstance(entity, provider);
+		assertArrayInstantiation(String[].class);
+		assertArrayInstantiation(String[][].class);
+		assertArrayInstantiation(int[].class);
 	}
 
 	@Test // DATACMNS-1126
@@ -136,6 +138,16 @@ class ReflectionEntityInstantiatorUnitTests<P extends PersistentProperty<P>> {
 			assertThat(o_O.getMessage()).contains(String.class.getName());
 			assertThat(o_O.getMessage()).contains("FOO");
 		}
+	}
+
+	private void assertArrayInstantiation(Class<?> arrayType) {
+
+		doReturn(arrayType).when(entity).getType();
+
+		Object instance = INSTANCE.createInstance(entity, provider);
+
+		assertThat(instance.getClass()).isEqualTo(arrayType);
+		assertThat(Array.getLength(instance)).isZero();
 	}
 
 	static class Foo {

@@ -1,0 +1,107 @@
+diff --git a/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java b/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java
+index 9d4ec5fb..14bf1d65 100644
+--- a/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java
++++ b/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java
+@@ -125,13 +125,13 @@ enum ReflectionEntityInstantiator implements EntityInstantiator {
+ 		try {
+ 			Class<?> clazz = entity.getType();
+ 			if (clazz.isArray()) {
+-				Class<?> ctype = clazz;
+-				int dims = 0;
+-				while (ctype.isArray()) {
+-					ctype = ctype.getComponentType();
+-					dims++;
++				Class<?> componentType = clazz;
++				int dimensions = 0;
++				while (componentType.isArray()) {
++					componentType = componentType.getComponentType();
++					dimensions++;
+ 				}
+-				return (T) Array.newInstance(clazz, dims);
++				return (T) Array.newInstance(componentType, new int[dimensions]);
+ 			} else {
+ 				return BeanUtils.instantiateClass(entity.getType());
+ 			}
+diff --git a/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java b/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java
+index 00bedb42..b76f678b 100755
+--- a/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java
++++ b/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java
+@@ -19,6 +19,7 @@ import static org.assertj.core.api.Assertions.*;
+ import static org.mockito.ArgumentMatchers.*;
+ import static org.mockito.Mockito.*;
+ 
++import java.lang.reflect.Array;
+ import java.util.Arrays;
+ import java.util.List;
+ import java.util.Map;
+@@ -70,9 +71,9 @@ class ClassGeneratingEntityInstantiatorUnitTests<P extends PersistentProperty<P>
+ 	@Test
+ 	void instantiatesArrayCorrectly() {
+ 
+-		doReturn(String[][].class).when(entity).getType();
+-
+-		this.instance.createInstance(entity, provider);
++		assertArrayInstantiation(String[].class);
++		assertArrayInstantiation(String[][].class);
++		assertArrayInstantiation(int[].class);
+ 	}
+ 
+ 	@Test // DATACMNS-1126
+@@ -444,6 +445,16 @@ class ClassGeneratingEntityInstantiatorUnitTests<P extends PersistentProperty<P>
+ 				.when(entity).getInstanceCreatorMetadata();
+ 	}
+ 
++	private void assertArrayInstantiation(Class<?> arrayType) {
++
++		doReturn(arrayType).when(entity).getType();
++
++		Object instance = this.instance.createInstance(entity, provider);
++
++		assertThat(instance.getClass()).isEqualTo(arrayType);
++		assertThat(Array.getLength(instance)).isZero();
++	}
++
+ 	static class Foo {
+ 
+ 		Foo(String foo) {
+diff --git a/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java b/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java
+index 16ca8ea5..a9453cb5 100755
+--- a/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java
++++ b/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java
+@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
+ import static org.mockito.Mockito.*;
+ import static org.springframework.data.mapping.model.ReflectionEntityInstantiator.*;
+ 
++import java.lang.reflect.Array;
+ import java.util.Arrays;
+ import java.util.List;
+ 
+@@ -59,8 +60,9 @@ class ReflectionEntityInstantiatorUnitTests<P extends PersistentProperty<P>> {
+ 	@Test
+ 	void instantiatesArrayCorrectly() {
+ 
+-		doReturn(String[][].class).when(entity).getType();
+-		INSTANCE.createInstance(entity, provider);
++		assertArrayInstantiation(String[].class);
++		assertArrayInstantiation(String[][].class);
++		assertArrayInstantiation(int[].class);
+ 	}
+ 
+ 	@Test // DATACMNS-1126
+@@ -138,6 +140,16 @@ class ReflectionEntityInstantiatorUnitTests<P extends PersistentProperty<P>> {
+ 		}
+ 	}
+ 
++	private void assertArrayInstantiation(Class<?> arrayType) {
++
++		doReturn(arrayType).when(entity).getType();
++
++		Object instance = INSTANCE.createInstance(entity, provider);
++
++		assertThat(instance.getClass()).isEqualTo(arrayType);
++		assertThat(Array.getLength(instance)).isZero();
++	}
++
+ 	static class Foo {
+ 
+ 		Foo(String foo) {

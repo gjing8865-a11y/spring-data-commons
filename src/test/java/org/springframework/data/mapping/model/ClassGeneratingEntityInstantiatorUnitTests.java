@@ -19,6 +19,7 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import java.lang.reflect.Array;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -70,9 +71,9 @@ class ClassGeneratingEntityInstantiatorUnitTests<P extends PersistentProperty<P>
 	@Test
 	void instantiatesArrayCorrectly() {
 
-		doReturn(String[][].class).when(entity).getType();
-
-		this.instance.createInstance(entity, provider);
+		assertArrayInstantiation(String[].class);
+		assertArrayInstantiation(String[][].class);
+		assertArrayInstantiation(int[].class);
 	}
 
 	@Test // DATACMNS-1126
@@ -442,6 +443,16 @@ class ClassGeneratingEntityInstantiatorUnitTests<P extends PersistentProperty<P>
 		doReturn(type).when(entity).getType();
 		doReturn(PreferredConstructorDiscoverer.discover(type))//
 				.when(entity).getInstanceCreatorMetadata();
+	}
+
+	private void assertArrayInstantiation(Class<?> arrayType) {
+
+		doReturn(arrayType).when(entity).getType();
+
+		Object instance = this.instance.createInstance(entity, provider);
+
+		assertThat(instance.getClass()).isEqualTo(arrayType);
+		assertThat(Array.getLength(instance)).isZero();
 	}
 
 	static class Foo {
