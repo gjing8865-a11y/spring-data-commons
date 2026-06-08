@@ -63,6 +63,46 @@ class ReflectionEntityInstantiatorUnitTests<P extends PersistentProperty<P>> {
 		INSTANCE.createInstance(entity, provider);
 	}
 
+	@Test
+	void instantiatesOneDimensionalObjectArrayWithCorrectRuntimeType() {
+
+		doReturn(String[].class).when(entity).getType();
+		Object result = INSTANCE.createInstance(entity, provider);
+		assertThat(result.getClass()).isEqualTo(String[].class);
+	}
+
+	@Test
+	void instantiatesOneDimensionalPrimitiveArrayWithCorrectRuntimeType() {
+
+		doReturn(int[].class).when(entity).getType();
+		Object result = INSTANCE.createInstance(entity, provider);
+		assertThat(result.getClass()).isEqualTo(int[].class);
+	}
+
+	@Test
+	void instantiatesTwoDimensionalObjectArrayWithCorrectRuntimeType() {
+
+		doReturn(String[][].class).when(entity).getType();
+		Object result = INSTANCE.createInstance(entity, provider);
+		assertThat(result.getClass()).isEqualTo(String[][].class);
+	}
+
+	@Test
+	void instantiatesThreeDimensionalObjectArrayWithCorrectRuntimeType() {
+
+		doReturn(String[][][].class).when(entity).getType();
+		Object result = INSTANCE.createInstance(entity, provider);
+		assertThat(result.getClass()).isEqualTo(String[][][].class);
+	}
+
+	@Test
+	void instantiatesTwoDimensionalPrimitiveArrayWithCorrectRuntimeType() {
+
+		doReturn(int[][].class).when(entity).getType();
+		Object result = INSTANCE.createInstance(entity, provider);
+		assertThat(result.getClass()).isEqualTo(int[][].class);
+	}
+
 	@Test // DATACMNS-1126
 	void instantiatesTypeWithPreferredConstructorUsingParameterValueProvider() {
 

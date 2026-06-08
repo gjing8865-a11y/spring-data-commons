@@ -131,7 +131,7 @@ enum ReflectionEntityInstantiator implements EntityInstantiator {
 					ctype = ctype.getComponentType();
 					dims++;
 				}
-				return (T) Array.newInstance(clazz, dims);
+				return (T) Array.newInstance(ctype, new int[dims]);
 			} else {
 				return BeanUtils.instantiateClass(entity.getType());
 			}
