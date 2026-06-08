@@ -322,10 +322,32 @@ public abstract class RepositoryFactorySupport
 			repositoryInit.tag("baseClass", repositoryBaseClass.getName());
 		}
 
+		RepositoryMetadata metadata = obtainRepositoryMetadata(applicationStartup, repositoryInterface);
+		RepositoryStub stub = obtainRepositoryComposition(applicationStartup, repositoryInterface, metadata, fragments);
+		RepositoryInformation information = stub.information();
+		RepositoryComposition composition = stub.composition();
+
+		Object target = obtainTargetRepository(applicationStartup, repositoryInterface, information);
+
+		RepositoryComposition compositionToUse = composition.append(RepositoryFragment.implemented(target));
+		validate(information, compositionToUse);
+
+		return createRepositoryProxy(applicationStartup, repositoryInit, repositoryInterface, fragments, metadata,
+				information, compositionToUse, target);
+	}
+
+	private RepositoryMetadata obtainRepositoryMetadata(ApplicationStartup applicationStartup,
+			Class<?> repositoryInterface) {
+
 		StartupStep repositoryMetadataStep = onEvent(applicationStartup, "spring.data.repository.metadata",
 				repositoryInterface);
 		RepositoryMetadata metadata = getRepositoryMetadata(repositoryInterface);
 		repositoryMetadataStep.end();
+		return metadata;
+	}
+
+	private RepositoryStub obtainRepositoryComposition(ApplicationStartup applicationStartup, Class<?> repositoryInterface,
+			RepositoryMetadata metadata, RepositoryFragments fragments) {
 
 		StartupStep repositoryCompositionStep = onEvent(applicationStartup, "spring.data.repository.composition",
 				repositoryInterface);
@@ -333,42 +355,63 @@ public abstract class RepositoryFactorySupport
 
 		RepositoryStub stub = getRepositoryStub(metadata, fragments);
 		RepositoryComposition composition = stub.composition();
-		RepositoryInformation information = stub.information();
 
 		repositoryCompositionStep.tag("fragments", () -> {
-
 			StringBuilder fragmentsTag = new StringBuilder();
-
 			for (RepositoryFragment<?> fragment : composition.getFragments()) {
-
 				if (!fragmentsTag.isEmpty()) {
 					fragmentsTag.append(";");
 				}
-
 				fragmentsTag.append(fragment.getSignatureContributor().getName());
 				fragmentsTag.append(fragment.getImplementation().map(it -> ":" + it.getClass().getName()).orElse(""));
 			}
-
 			return fragmentsTag.toString();
 		});
-
 		repositoryCompositionStep.end();
+		return stub;
+	}
+
+	private Object obtainTargetRepository(ApplicationStartup applicationStartup, Class<?> repositoryInterface,
+			RepositoryInformation information) {
 
 		StartupStep repositoryTargetStep = onEvent(applicationStartup, "spring.data.repository.target",
 				repositoryInterface);
 		Object target = getTargetRepository(information);
-
 		repositoryTargetStep.tag("target", target.getClass().getName());
 		repositoryTargetStep.end();
+		return target;
+	}
 
-		RepositoryComposition compositionToUse = composition.append(RepositoryFragment.implemented(target));
-		validate(information, compositionToUse);
+	@SuppressWarnings("unchecked")
+	private <T> T createRepositoryProxy(ApplicationStartup applicationStartup, StartupStep repositoryInit,
+			Class<T> repositoryInterface, RepositoryFragments fragments, RepositoryMetadata metadata,
+			RepositoryInformation information, RepositoryComposition compositionToUse, Object target) {
 
-		// Create proxy
 		StartupStep repositoryProxyStep = onEvent(applicationStartup, "spring.data.repository.proxy", repositoryInterface);
+
 		ProxyFactory result = new ProxyFactory();
 		result.setTarget(target);
 		result.setInterfaces(repositoryInterface, Repository.class, TransactionalProxy.class);
+
+		addMethodInvocationValidator(result, repositoryInterface);
+		addExposeMetadataInterceptor(result, repositoryInterface, fragments, metadata);
+		invokePostProcessors(applicationStartup, repositoryInterface, result, information);
+		addDefaultMethodInterceptor(result, repositoryInterface);
+		addQueryExecutorInterceptor(result, information);
+		addImplementationExecutionInterceptor(result, information, compositionToUse);
+
+		T repository = (T) result.getProxy(classLoader);
+		repositoryProxyStep.end();
+		repositoryInit.end();
+
+		if (logger.isDebugEnabled()) {
+			logger.debug(LogMessage.format("Finished creation of repository instance for %s.", repositoryInterface.getName()));
+		}
+
+		return repository;
+	}
+
+	private void addMethodInvocationValidator(ProxyFactory result, Class<?> repositoryInterface) {
 
 		if (NullnessMethodInvocationValidator.supports(repositoryInterface)) {
 			if (logger.isTraceEnabled()) {
@@ -376,6 +419,10 @@ public abstract class RepositoryFactorySupport
 			}
 			result.addAdvice(new MethodInvocationValidator());
 		}
+	}
+
+	private void addExposeMetadataInterceptor(ProxyFactory result, Class<?> repositoryInterface,
+			RepositoryFragments fragments, RepositoryMetadata metadata) {
 
 		if (this.exposeMetadata || shouldExposeMetadata(fragments)) {
 			if (logger.isTraceEnabled()) {
@@ -384,6 +431,10 @@ public abstract class RepositoryFactorySupport
 			result.addAdvice(new ExposeMetadataInterceptor(metadata));
 			result.addAdvisor(ExposeInvocationInterceptor.ADVISOR);
 		}
+	}
+
+	private void invokePostProcessors(ApplicationStartup applicationStartup, Class<?> repositoryInterface,
+			ProxyFactory result, RepositoryInformation information) {
 
 		if (!postProcessors.isEmpty()) {
 			StartupStep repositoryPostprocessorsStep = onEvent(applicationStartup, "spring.data.repository.postprocessors",
@@ -398,6 +449,9 @@ public abstract class RepositoryFactorySupport
 			});
 			repositoryPostprocessorsStep.end();
 		}
+	}
+
+	private void addDefaultMethodInterceptor(ProxyFactory result, Class<?> repositoryInterface) {
 
 		if (DefaultMethodInvokingMethodInterceptor.hasDefaultMethods(repositoryInterface)) {
 			if (logger.isTraceEnabled()) {
@@ -406,26 +460,21 @@ public abstract class RepositoryFactorySupport
 			}
 			result.addAdvice(new DefaultMethodInvokingMethodInterceptor());
 		}
+	}
+
+	private void addQueryExecutorInterceptor(ProxyFactory result, RepositoryInformation information) {
 
 		Optional<QueryLookupStrategy> queryLookupStrategy = getQueryLookupStrategy(queryLookupStrategyKey,
 				getValueExpressionDelegate());
 		result.addAdvice(new QueryExecutorMethodInterceptor(information, getProjectionFactory(),
-				queryLookupStrategy.orElse(null),
-				namedQueries, queryPostProcessors, methodInvocationListeners));
+				queryLookupStrategy.orElse(null), namedQueries, queryPostProcessors, methodInvocationListeners));
+	}
+
+	private void addImplementationExecutionInterceptor(ProxyFactory result, RepositoryInformation information,
+			RepositoryComposition compositionToUse) {
 
 		result.addAdvice(
 				new ImplementationMethodExecutionInterceptor(information, compositionToUse, methodInvocationListeners));
-
-		T repository = (T) result.getProxy(classLoader);
-		repositoryProxyStep.end();
-		repositoryInit.end();
-
-		if (logger.isDebugEnabled()) {
-			logger
-					.debug(LogMessage.format("Finished creation of repository instance for %s.", repositoryInterface.getName()));
-		}
-
-		return repository;
 	}
 
 	ValueExpressionDelegate getValueExpressionDelegate() {

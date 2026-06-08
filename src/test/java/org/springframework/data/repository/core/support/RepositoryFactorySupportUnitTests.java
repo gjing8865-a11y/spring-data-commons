@@ -51,6 +51,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.core.metrics.ApplicationStartup;
+import org.springframework.core.metrics.StartupStep;
 import org.springframework.data.projection.ProjectionFactory;
 import org.springframework.data.querydsl.QuerydslPredicateExecutor;
 import org.springframework.data.repository.CrudRepository;
@@ -498,6 +500,56 @@ class RepositoryFactorySupportUnitTests {
 		orderedInvocation.verify(startup).start("spring.data.repository.composition");
 		orderedInvocation.verify(startup).start("spring.data.repository.target");
 		orderedInvocation.verify(startup).start("spring.data.repository.proxy");
+		
+		// Verify tags are invoked on the steps
+		StartupStep step = startup.start("test");
+		ArgumentCaptor<String> tagsCaptor = ArgumentCaptor.forClass(String.class);
+		verify(step, atLeastOnce()).tag(tagsCaptor.capture(), any(String.class));
+		verify(step, atLeastOnce()).tag(tagsCaptor.capture(), any(java.util.function.Supplier.class));
+		assertThat(tagsCaptor.getAllValues()).contains("fragment.count", "fragments", "target");
+	}
+
+	@Test
+	void postProcessorSeesProxyFactoryState() {
+		RepositoryProxyPostProcessor processor = mock(RepositoryProxyPostProcessor.class);
+		factory.addRepositoryProxyPostProcessor(processor);
+		factory.getRepository(ObjectRepository.class);
+
+		ArgumentCaptor<ProxyFactory> captor = ArgumentCaptor.forClass(ProxyFactory.class);
+		verify(processor).postProcess(captor.capture(), any(RepositoryInformation.class));
+		ProxyFactory proxyFactory = captor.getValue();
+
+		assertThat(proxyFactory.getTargetClass()).isNotNull();
+		assertThat(proxyFactory.getProxiedInterfaces()).contains(ObjectRepository.class, Repository.class, TransactionalProxy.class);
+	}
+
+	@Test
+	void restoresThreadLocalMetadataOnException() {
+		factory.setExposeMetadata(true);
+		when(factory.queryOne.execute(any(Object[].class))).thenThrow(new RuntimeException("test exception"));
+		var repository = factory.getRepository(ObjectRepository.class);
+
+		try {
+			repository.findMetadataByLastname();
+		} catch (Exception e) {
+			// Expected
+		}
+
+		assertThatThrownBy(RepositoryMethodContextHolder::getContext)
+				.isInstanceOf(IllegalStateException.class);
+	}
+
+	@Test
+	void doesNotExposeMetadataByDefault() {
+		var repository = factory.getRepository(ObjectRepository.class);
+
+		when(factory.queryOne.execute(any(Object[].class))).thenAnswer(invocation -> {
+			assertThatThrownBy(RepositoryMethodContextHolder::getContext)
+					.isInstanceOf(IllegalStateException.class);
+			return new Object();
+		});
+
+		repository.findMetadataByLastname();
 	}
 
 	@Test // GH-2341
