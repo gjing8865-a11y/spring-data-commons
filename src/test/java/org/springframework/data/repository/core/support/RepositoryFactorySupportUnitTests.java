@@ -30,6 +30,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import org.aopalliance.intercept.MethodInvocation;
 import org.jspecify.annotations.NonNull;
@@ -38,6 +39,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -47,6 +49,8 @@ import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.aop.interceptor.ExposeInvocationInterceptor;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.core.metrics.ApplicationStartup;
+import org.springframework.core.metrics.StartupStep;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -293,6 +297,222 @@ class RepositoryFactorySupportUnitTests {
 		assertThat(metadata.context().getMethod().getName()).isEqualTo("findMetadataByLastname");
 		assertThat(metadata.context().getMetadata().getDomainType()).isEqualTo(Object.class);
 		assertThat(metadata.methodInvocation().getMethod().getName()).isEqualTo("findMetadataByLastname");
+	}
+
+	@Test // GH-XXXX
+	void metadataIsNotExposedByDefault() {
+
+		when(factory.queryOne.execute(any(Object[].class)))
+				.then(invocation -> RepositoryMethodContextHolder.getContext());
+
+		var repository = factory.getRepository(ObjectRepository.class);
+
+		assertThatThrownBy(repository::findMetadataByLastname)
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("RepositoryMethodContext");
+	}
+
+	@Test // GH-XXXX
+	void exposesMetadataWhenSetExposeMetadataIsTrue() {
+
+		when(factory.queryOne.execute(any(Object[].class)))
+				.then(invocation -> RepositoryMethodContextHolder.getContext());
+
+		factory.setExposeMetadata(true);
+
+		var repository = factory.getRepository(ObjectRepository.class);
+		var context = repository.findMetadataByLastname();
+
+		assertThat(context).isInstanceOf(RepositoryMethodContext.class);
+		assertThat(((RepositoryMethodContext) context).getMethod().getName()).isEqualTo("findMetadataByLastname");
+	}
+
+	@Test // GH-XXXX
+	void exposesMetadataWhenFragmentImplementsRepositoryMetadataAccess() {
+
+		when(factory.queryOne.execute(any(Object[].class)))
+				.then(invocation -> RepositoryMethodContextHolder.getContext());
+
+		var repository = factory.getRepository(ObjectRepository.class, new RepositoryMetadataAccess() {});
+		var context = repository.findMetadataByLastname();
+
+		assertThat(context).isInstanceOf(RepositoryMethodContext.class);
+		assertThat(((RepositoryMethodContext) context).getMethod().getName()).isEqualTo("findMetadataByLastname");
+	}
+
+	@Test // GH-XXXX
+	void metadataThreadLocalIsRestoredAfterException() {
+
+		when(factory.queryOne.execute(any(Object[].class)))
+				.then(invocation -> {
+					throw new IllegalStateException("test exception");
+				});
+
+		factory.setExposeMetadata(true);
+
+		var repository = factory.getRepository(ObjectRepository.class);
+
+		RepositoryMethodContext beforeContext = RepositoryMethodContextHolder.setContext(null);
+
+		try {
+			repository.findMetadataByLastname();
+			fail("Expected exception");
+		} catch (IllegalStateException e) {
+		}
+
+		RepositoryMethodContext afterContext = RepositoryMethodContextHolder.setContext(null);
+		assertThat(afterContext).isSameAs(beforeContext);
+	}
+
+	@Test // GH-XXXX
+	void metadataThreadLocalIsRestoredAfterSuccessfulInvocation() {
+
+		when(factory.queryOne.execute(any(Object[].class)))
+				.then(invocation -> RepositoryMethodContextHolder.getContext());
+
+		factory.setExposeMetadata(true);
+
+		var repository = factory.getRepository(ObjectRepository.class);
+
+		RepositoryMethodContext beforeContext = RepositoryMethodContextHolder.setContext(null);
+
+		var context = repository.findMetadataByLastname();
+
+		RepositoryMethodContext afterContext = RepositoryMethodContextHolder.setContext(null);
+		assertThat(afterContext).isSameAs(beforeContext);
+		assertThat(context).isInstanceOf(RepositoryMethodContext.class);
+	}
+
+	@Test // GH-XXXX
+	void startupStepsAreInvokedWithCorrectNamesAndTags() {
+
+		factory.addRepositoryProxyPostProcessor(repositoryPostProcessor);
+		factory.getRepository(ObjectRepository.class, backingRepo);
+
+		var startup = factory.getApplicationStartup();
+
+		var orderedInvocation = Mockito.inOrder(startup);
+		orderedInvocation.verify(startup).start("spring.data.repository.init");
+		orderedInvocation.verify(startup).start("spring.data.repository.metadata");
+		orderedInvocation.verify(startup).start("spring.data.repository.composition");
+		orderedInvocation.verify(startup).start("spring.data.repository.target");
+		orderedInvocation.verify(startup).start("spring.data.repository.proxy");
+		orderedInvocation.verify(startup).start("spring.data.repository.postprocessors");
+		orderedInvocation.verify(startup).start("spring.data.repository.postprocessor");
+
+		verify(startup, atLeastOnce()).start(anyString());
+	}
+
+	@Test // GH-XXXX
+	void postProcessorSeesCorrectProxyFactoryState() {
+
+		ArgumentCaptor<ProxyFactory> proxyFactoryCaptor = ArgumentCaptor.forClass(ProxyFactory.class);
+		doAnswer(invocation -> {
+			ProxyFactory pf = invocation.getArgument(0);
+			assertThat(pf.getTargetSource().getTarget()).isSameAs(backingRepo);
+			assertThat(pf.getProxiedInterfaces()).contains(
+					ObjectRepository.class, Repository.class, TransactionalProxy.class);
+			return null;
+		}).when(repositoryPostProcessor).postProcess(any(ProxyFactory.class), any(RepositoryInformation.class));
+
+		factory.addRepositoryProxyPostProcessor(repositoryPostProcessor);
+		factory.getRepository(ObjectRepository.class, backingRepo);
+
+		verify(repositoryPostProcessor).postProcess(proxyFactoryCaptor.capture(), any(RepositoryInformation.class));
+	}
+
+	@Test // GH-XXXX
+	void adviceOrderPreservesDefaultMethodRouting() {
+
+		var repository = factory.getRepository(ObjectRepository.class, customImplementation);
+
+		assertThat(repository.staticMethodDelegate()).isEqualTo("OK");
+
+		verifyNoInteractions(customImplementation);
+		verifyNoInteractions(backingRepo);
+	}
+
+	@Test // GH-XXXX
+	void adviceOrderPreservesQueryMethodRouting() {
+
+		factory.addInvocationListener(invocationListener);
+
+		var repository = factory.getRepository(ObjectRepository.class);
+		repository.save(new Object());
+
+		verify(backingRepo, times(1)).save(any(Object.class));
+		verify(invocationListener).afterInvocation(any());
+	}
+
+	@Test // GH-XXXX
+	void adviceOrderPreservesCustomFragmentMethodRouting() {
+
+		var repository = factory.getRepository(ObjectRepository.class, customImplementation);
+		repository.findById(1);
+
+		verify(customImplementation, times(1)).findById(1);
+		verify(backingRepo, times(0)).findById(1);
+	}
+
+	@Test // GH-XXXX
+	void repositoryInformationCacheIsReusedForSameInterfaceAndFragments() {
+
+		var repository1 = factory.getRepository(ObjectAndQuerydslRepository.class, backingRepo);
+		var repository2 = factory.getRepository(ObjectAndQuerydslRepository.class, backingRepo);
+
+		for (int i = 0; i < 10; i++) {
+			RepositoryFragments fragments = RepositoryFragments.just(backingRepo);
+			RepositoryMetadata metadata = factory.getRepositoryMetadata(ObjectAndQuerydslRepository.class);
+			factory.getRepositoryInformation(metadata, fragments);
+		}
+
+		Map<Object, RepositoryInformation> cache = (Map) ReflectionTestUtils.getField(factory,
+				"repositoryInformationCache");
+
+		assertThat(cache).hasSize(1);
+	}
+
+	@Test // GH-XXXX
+	void startupStepsEndInCorrectLifecycle() {
+
+		var startup = factory.getApplicationStartup();
+		var initStep = mock(StartupStep.class);
+		var metadataStep = mock(StartupStep.class);
+		var compositionStep = mock(StartupStep.class);
+		var targetStep = mock(StartupStep.class);
+		var proxyStep = mock(StartupStep.class);
+		var postprocessorsStep = mock(StartupStep.class);
+		var postprocessorStep = mock(StartupStep.class);
+
+		when(startup.start("spring.data.repository.init")).thenReturn(initStep);
+		when(startup.start("spring.data.repository.metadata")).thenReturn(metadataStep);
+		when(startup.start("spring.data.repository.composition")).thenReturn(compositionStep);
+		when(startup.start("spring.data.repository.target")).thenReturn(targetStep);
+		when(startup.start("spring.data.repository.proxy")).thenReturn(proxyStep);
+		when(startup.start("spring.data.repository.postprocessors")).thenReturn(postprocessorsStep);
+		when(startup.start("spring.data.repository.postprocessor")).thenReturn(postprocessorStep);
+		when(initStep.tag(anyString(), anyString())).thenReturn(initStep);
+		when(metadataStep.tag(anyString(), anyString())).thenReturn(metadataStep);
+		when(compositionStep.tag(anyString(), anyString())).thenReturn(compositionStep);
+		when(compositionStep.tag(anyString(), any(Supplier.class))).thenReturn(compositionStep);
+		when(targetStep.tag(anyString(), anyString())).thenReturn(targetStep);
+		when(proxyStep.tag(anyString(), anyString())).thenReturn(proxyStep);
+		when(postprocessorsStep.tag(anyString(), anyString())).thenReturn(postprocessorsStep);
+		when(postprocessorStep.tag(anyString(), anyString())).thenReturn(postprocessorStep);
+
+		factory.addRepositoryProxyPostProcessor(repositoryPostProcessor);
+		factory.getRepository(ObjectRepository.class, backingRepo);
+
+		InOrder inOrder = inOrder(initStep, metadataStep, compositionStep, targetStep, proxyStep,
+				postprocessorsStep, postprocessorStep);
+
+		inOrder.verify(metadataStep).end();
+		inOrder.verify(compositionStep).end();
+		inOrder.verify(targetStep).end();
+		inOrder.verify(postprocessorStep).end();
+		inOrder.verify(postprocessorsStep).end();
+		inOrder.verify(proxyStep).end();
+		inOrder.verify(initStep).end();
 	}
 
 	@Test
