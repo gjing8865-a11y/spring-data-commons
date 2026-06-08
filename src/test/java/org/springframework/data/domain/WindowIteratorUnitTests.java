@@ -24,6 +24,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import org.junit.jupiter.api.Test;
@@ -153,5 +154,133 @@ class WindowIteratorUnitTests {
 
 		List<String> items = Streamable.of(() -> iterator).toList();
 		assertThat(items).containsExactly("d", "c", "b", "a");
+	}
+
+	@Test
+	void repeatedHasNextDoesNotReloadCurrentWindow() {
+		AtomicInteger callCount = new AtomicInteger(0);
+		Window<String> window = Window.from(List.of("a", "b"), value -> ScrollPosition.offset());
+		WindowIterator<String> iterator = WindowIterator.of(it -> {
+			callCount.incrementAndGet();
+			return window;
+		}).startingAt(ScrollPosition.offset());
+
+		iterator.hasNext();
+		iterator.hasNext();
+		assertThat(callCount.get()).isEqualTo(1);
+	}
+
+	@Test
+	void terminalHasNextDoesNotReloadAfterExhaustion() {
+		AtomicInteger callCount = new AtomicInteger(0);
+		Window<String> window = Window.from(List.of("a"), value -> ScrollPosition.offset());
+		WindowIterator<String> iterator = WindowIterator.of(it -> {
+			callCount.incrementAndGet();
+			return window;
+		}).startingAt(ScrollPosition.offset());
+
+		iterator.next();
+		iterator.hasNext();
+		iterator.hasNext();
+		assertThat(callCount.get()).isEqualTo(1);
+	}
+
+	@Test
+	void nextLoadsFollowingWindowUsingLastForwardPosition() {
+		List<ScrollPosition> positions = new ArrayList<>();
+		Window<String> window1 = Window.from(List.of("a", "b"), value -> ScrollPosition.offset(value), true);
+		Window<String> window2 = Window.from(List.of("c", "d"), value -> ScrollPosition.offset(2 + value));
+		WindowIterator<String> iterator = WindowIterator.of(it -> {
+			positions.add(it);
+			if (it.isInitial()) {
+				return window1;
+			}
+			return window2;
+		}).startingAt(ScrollPosition.offset());
+
+		iterator.next();
+		iterator.next();
+		iterator.next();
+		assertThat(positions).hasSize(2);
+		assertThat(positions.get(1)).isEqualTo(ScrollPosition.offset(1));
+	}
+
+	@Test
+	void backwardKeysetUsesFirstPositionForNextWindow() {
+		List<ScrollPosition> positions = new ArrayList<>();
+		Window<String> initial = Window.from(List.of("c", "d"),
+				value -> KeysetScrollPosition.of(Map.of("k", 10 + value), Direction.BACKWARD), true);
+		Window<String> terminal = Window.from(List.of("a", "b"),
+				value -> KeysetScrollPosition.of(Map.of("k", value), Direction.BACKWARD));
+
+		WindowIterator<String> iterator = WindowIterator.of(it -> {
+			positions.add(it);
+			if (it instanceof KeysetScrollPosition ksp) {
+				if (Integer.valueOf(10).equals(ksp.getKeys().get("k"))) {
+					return terminal;
+				}
+			}
+			return initial;
+		}).startingAt(ScrollPosition.keyset().backward());
+
+		iterator.next();
+		iterator.next();
+		iterator.next();
+		assertThat(positions).hasSize(2);
+		assertThat(positions.get(1)).isEqualTo(KeysetScrollPosition.of(Map.of("k", 10), Direction.BACKWARD));
+	}
+
+	@Test
+	void nullWindowFromFunctionFailsWithIllegalStateException() {
+		WindowIterator<Object> iterator = WindowIterator.of(it -> null).startingAt(ScrollPosition.offset());
+		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext);
+	}
+
+	@Test
+	void emptyWindowWithHasNextFailsWithIllegalStateException() {
+		Window<String> emptyWindow = Window.from(Collections.emptyList(), value -> ScrollPosition.offset(), true);
+		WindowIterator<String> iterator = WindowIterator.of(it -> emptyWindow).startingAt(ScrollPosition.offset());
+		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext);
+	}
+
+	@Test
+	void nonProgressingScrollPositionFailsWithIllegalStateException() {
+		ScrollPosition fixedPosition = ScrollPosition.offset(5);
+		Window<String> window = Window.from(List.of("a", "b"), value -> fixedPosition, true);
+		WindowIterator<String> iterator = WindowIterator.of(it -> window).startingAt(fixedPosition);
+		iterator.next();
+		iterator.next();
+		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext);
+	}
+
+	@Test
+	void positionAtFailureDoesNotAdvanceIteratorState() {
+		AtomicInteger callCount = new AtomicInteger(0);
+		ScrollPosition position1 = ScrollPosition.offset(0);
+		Window<String> window1 = Window.from(List.of("a", "b"), index -> {
+			if (index == 1) { // last index (size - 1 = 1)
+				throw new IllegalStateException("Oops!");
+			}
+			return ScrollPosition.offset(index);
+		}, true);
+		WindowIterator<String> iterator = WindowIterator.of(it -> {
+			callCount.incrementAndGet();
+			if (it.equals(position1)) {
+				return window1;
+			}
+			throw new RuntimeException("Should not be called!");
+		}).startingAt(position1);
+
+		iterator.next(); // "a"
+		iterator.next(); // "b"
+		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext);
+		assertThat(callCount.get()).isEqualTo(1);
+	}
+
+	@Test
+	void nextStillThrowsNoSuchElementExceptionWhenNoDataAvailable() {
+		Window<Object> window = Window.from(Collections.emptyList(), value -> ScrollPosition.offset());
+		WindowIterator<Object> iterator = WindowIterator.of(it -> window).startingAt(ScrollPosition.offset());
+		assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(iterator::next);
 	}
 }
