@@ -343,6 +343,98 @@ class CustomConversionsUnitTests {
 		verify(actualLoggerSpy, never()).warn(anyString(), any());
 	}
 
+	@Test
+	void userConverterIsNotAffectedByDefaultConverterFilter() {
+
+		ConverterConfiguration config = new ConverterConfiguration(StoreConversions.NONE,
+				Collections.singletonList(StringToIntegerConverter.INSTANCE),
+				pair -> false); // Filter rejects everything
+
+		CustomConversions conversions = new CustomConversions(config);
+		assertThat(conversions.hasCustomWriteTarget(String.class, Integer.class)).isTrue();
+	}
+
+	@Test
+	void defaultConverterIsSkippedByFilter() {
+
+		ConverterConfiguration config = new ConverterConfiguration(StoreConversions.NONE,
+				Collections.emptyList(),
+				pair -> false); // Filter rejects everything
+
+		CustomConversions conversions = new CustomConversions(config);
+		// java.time.LocalDateTime converter is a default converter
+		assertThat(conversions.hasCustomWriteTarget(java.time.LocalDateTime.class)).isFalse();
+	}
+
+	@Test
+	void storeConverterIsRegisteredAccordingToStoreSimpleTypeRules() {
+
+		StoreConversions storeConversions = StoreConversions.of(SimpleTypeHolder.DEFAULT, StringToIntegerConverter.INSTANCE);
+		CustomConversions conversions = new CustomConversions(storeConversions, Collections.emptyList());
+
+		assertThat(conversions.hasCustomWriteTarget(String.class, Integer.class)).isTrue();
+		assertThat(conversions.isSimpleType(String.class)).isTrue(); // simple type from writing converter
+	}
+
+	@Test
+	void subtypeTargetCacheDoesNotPolluteRequestedTargetCache() {
+
+		CustomConversions conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(NumberToStringConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
+		assertThat(conversions.getCustomWriteTarget(Long.class, String.class)).hasValue(String.class);
+	}
+
+	@Test
+	void absentTargetCacheDoesNotAffectAnotherRequestedTargetQueryForSameSource() {
+
+		CustomConversions conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(NumberToStringConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(Long.class, Integer.class)).isEmpty(); // Caches absent for Integer
+		assertThat(conversions.getCustomWriteTarget(Long.class, String.class)).hasValue(String.class); // Should still find String
+	}
+
+	@Test
+	void cglibProxyTypeHitsCustomWriteTarget() {
+
+		CustomConversions conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(FormatToStringConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(createProxyTypeFor(Format.class))).hasValue(String.class);
+	}
+
+	@Test
+	void cglibProxyTypeHitsCustomReadTarget() {
+
+		CustomConversions conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(CustomTypeToStringConverter.INSTANCE));
+
+		assertThat(conversions.hasCustomReadTarget(createProxyTypeFor(CustomType.class), String.class)).isTrue();
+	}
+
+	@Test
+	void propertyValueConversionsNullBehaviorRemainsUnchanged() {
+
+		CustomConversions conversions = new CustomConversions(
+				new ConverterConfiguration(StoreConversions.NONE, Collections.emptyList(), it -> true, null));
+
+		assertThat(conversions.getPropertyValueConversions()).isNull();
+		assertThat(conversions.hasValueConverter(mock(PersistentProperty.class))).isFalse();
+	}
+
+	@Test
+	void rawWriteTargetAndRequestedWriteTargetCachesDoNotPolluteEachOther() {
+
+		CustomConversions conversions = new CustomConversions(StoreConversions.NONE,
+				Collections.singletonList(NumberToStringConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(Long.class)).hasValue(String.class);
+		assertThat(conversions.getCustomWriteTarget(Long.class, Integer.class)).isEmpty();
+		assertThat(conversions.getCustomWriteTarget(Long.class)).hasValue(String.class);
+	}
+
 	private static Class<?> createProxyTypeFor(Class<?> type) {
 
 		var factory = new ProxyFactory();
