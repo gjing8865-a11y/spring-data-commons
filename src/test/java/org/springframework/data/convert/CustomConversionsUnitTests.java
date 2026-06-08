@@ -343,6 +343,172 @@ class CustomConversionsUnitTests {
 		verify(actualLoggerSpy, never()).warn(anyString(), any());
 	}
 
+	// ================== 新增的测试场景 ==================
+
+	@Test // 1. user converter 不受 default converter filter 影响
+	void userConverterBypassesDefaultConverterFilter() {
+		// 创建一个会过滤掉 LocalDateTimeToDateConverter 的配置
+		Predicate<ConvertiblePair> filter = pair ->
+				!(pair.getSourceType().equals(java.time.LocalDateTime.class)
+						&& pair.getTargetType().equals(Date.class));
+
+		ConverterConfiguration config = new ConverterConfiguration(
+				StoreConversions.NONE,
+				Collections.singletonList(LocalDateTimeToDateConverter.INSTANCE),
+				filter);
+
+		CustomConversions conversions = new CustomConversions(config);
+
+		// 用户转换器应该仍然被注册，不受 filter 影响
+		assertThat(conversions.hasCustomWriteTarget(java.time.LocalDateTime.class, Date.class)).isTrue();
+		assertThat(conversions.getCustomWriteTarget(java.time.LocalDateTime.class)).isPresent();
+	}
+
+	@Test // 2. default converter 被 filter 跳过
+	void defaultConverterIsSkippedByFilter() {
+		Predicate<ConvertiblePair> filter = pair ->
+				!(pair.getSourceType().equals(java.time.LocalDateTime.class)
+						&& pair.getTargetType().equals(Date.class));
+
+		ConverterConfiguration configWithFilter = new ConverterConfiguration(
+				StoreConversions.NONE,
+				Collections.emptyList(),
+				filter);
+
+		ConverterConfiguration configWithoutFilter = new ConverterConfiguration(
+				StoreConversions.NONE,
+				Collections.emptyList());
+
+		CustomConversions conversionsWithFilter = new CustomConversions(configWithFilter);
+		CustomConversions conversionsWithoutFilter = new CustomConversions(configWithoutFilter);
+
+		// 有 filter 的配置应该不包含该默认转换器
+		assertThat(conversionsWithFilter.hasCustomWriteTarget(java.time.LocalDateTime.class, Date.class)).isFalse();
+
+		// 没有 filter 的配置应该包含该默认转换器
+		assertThat(conversionsWithoutFilter.hasCustomWriteTarget(java.time.LocalDateTime.class, Date.class)).isTrue();
+	}
+
+	@Test // 3. store converter 仍按 store simple type 规则注册
+	void storeConverterRegisteredByStoreSimpleTypeRules() {
+		SimpleTypeHolder customSimpleTypes = new SimpleTypeHolder(
+				Collections.singleton(Format.class), true);
+
+		StoreConversions storeConversions = StoreConversions.of(
+				customSimpleTypes,
+				FormatToStringConverter.INSTANCE);
+
+		CustomConversions conversions = new CustomConversions(
+				storeConversions, Collections.emptyList());
+
+		// Store converter 应该被正确注册
+		assertThat(conversions.getCustomWriteTarget(Format.class)).isPresent();
+		assertThat(conversions.getCustomWriteTarget(Format.class)).hasValue(String.class);
+	}
+
+	@Test // 4. subtype target cache 不污染 requested target cache
+	void subtypeTargetCacheDoesNotPolluteRequestedTargetCache() {
+		CustomConversions conversions = new CustomConversions(
+				StoreConversions.NONE,
+				Collections.singletonList(NumberToStringConverter.INSTANCE));
+
+		// 首先查询 Long → Object（应该返回空）
+		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
+
+		// 然后查询 Long（应该返回 String）
+		assertThat(conversions.getCustomWriteTarget(Long.class)).hasValue(String.class);
+
+		// 再次查询 Long → Object（仍然应该返回空，不受第二个查询影响）
+		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
+	}
+
+	@Test // 5. absent target 缓存后，不影响同 source 的另一个 requested target 查询
+	void absentTargetCacheDoesNotAffectOtherRequestedTargets() {
+		CustomConversions conversions = new CustomConversions(
+				StoreConversions.NONE,
+				Arrays.asList(
+						FormatToStringConverter.INSTANCE,
+						StringToFormatConverter.INSTANCE));
+
+		// 首先查询 Format → Integer（应该返回空，然后被缓存）
+		assertThat(conversions.getCustomWriteTarget(Format.class, Integer.class)).isEmpty();
+
+		// 然后查询 Format → String（应该正常返回）
+		assertThat(conversions.getCustomWriteTarget(Format.class, String.class)).hasValue(String.class);
+
+		// 再次查询 Format → Integer（仍然返回空）
+		assertThat(conversions.getCustomWriteTarget(Format.class, Integer.class)).isEmpty();
+	}
+
+	@Test // 6. CGLIB proxy 类型仍能命中 custom write target
+	void cglibProxyTypeStillHitsCustomWriteTarget() {
+		CustomConversions conversions = new CustomConversions(
+				StoreConversions.NONE,
+				Collections.singletonList(FormatToStringConverter.INSTANCE));
+
+		Class<?> proxyType = createProxyTypeFor(Format.class);
+
+		assertThat(conversions.getCustomWriteTarget(proxyType)).hasValue(String.class);
+	}
+
+	@Test // 7. CGLIB proxy 类型仍能命中 custom read target
+	void cglibProxyTypeStillHitsCustomReadTarget() {
+		CustomConversions conversions = new CustomConversions(
+				StoreConversions.NONE,
+				Collections.singletonList(CustomTypeToStringConverter.INSTANCE));
+
+		Class<?> proxyType = createProxyTypeFor(CustomType.class);
+
+		assertThat(conversions.hasCustomReadTarget(proxyType, String.class)).isTrue();
+	}
+
+	@Test // 8. property value conversions 为 null 时行为不变
+	void propertyValueConversionsNullBehaviorUnchanged() {
+		ConverterConfiguration config = new ConverterConfiguration(
+				StoreConversions.NONE,
+				Collections.emptyList(),
+				Predicate.isTrue(),
+				null);
+
+		// 创建实例应该不抛出异常
+		CustomConversions conversions = new CustomConversions(config);
+
+		// propertyValueConversions 应该返回 null
+		assertThat(conversions.getPropertyValueConversions()).isNull();
+
+		// hasValueConverter 应该返回 false
+		assertThat(conversions.hasValueConverter(mock(PersistentProperty.class))).isFalse();
+	}
+
+	@Test // 9. getCustomWriteTarget(source) 与 getCustomWriteTarget(source, requestedTarget) 的缓存互不污染
+	void rawAndRequestedWriteTargetCachesAreSeparate() {
+		CustomConversions conversions = new CustomConversions(
+				StoreConversions.NONE,
+				Arrays.asList(
+						NumberToStringConverter.INSTANCE,
+						FormatToStringConverter.INSTANCE));
+
+		// 先查询 Number（不带 requested target）
+		assertThat(conversions.getCustomWriteTarget(Number.class)).hasValue(String.class);
+
+		// 再查询 Number → Integer（应该返回空）
+		assertThat(conversions.getCustomWriteTarget(Number.class, Integer.class)).isEmpty();
+
+		// 再次查询 Number（不带 requested target），应该仍然返回 String
+		assertThat(conversions.getCustomWriteTarget(Number.class)).hasValue(String.class);
+
+		// 同样地，先查询 Format → String
+		assertThat(conversions.getCustomWriteTarget(Format.class, String.class)).hasValue(String.class);
+
+		// 再查询 Format（不带 requested target）
+		assertThat(conversions.getCustomWriteTarget(Format.class)).hasValue(String.class);
+
+		// 再次查询 Format → String，应该仍然返回 String
+		assertThat(conversions.getCustomWriteTarget(Format.class, String.class)).hasValue(String.class);
+	}
+
+	// ================== 原有方法 ==================
+
 	private static Class<?> createProxyTypeFor(Class<?> type) {
 
 		var factory = new ProxyFactory();

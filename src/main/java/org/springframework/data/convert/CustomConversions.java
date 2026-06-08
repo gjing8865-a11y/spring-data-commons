@@ -117,21 +117,10 @@ public class CustomConversions {
 	 * @since 2.3
 	 */
 	public CustomConversions(ConverterConfiguration converterConfiguration) {
-
 		this.converterConfiguration = converterConfiguration;
-
-		List<Object> registeredConverters = collectPotentialConverterRegistrations(
-				converterConfiguration.getStoreConversions(), converterConfiguration.getUserConverters()).stream()
-				.filter(this::isSupportedConverter).filter(this::shouldRegister)
-				.map(ConverterRegistrationIntent::getConverterRegistration).map(this::register).distinct()
-				.collect(Collectors.toCollection(ArrayList::new));
-
-		Collections.reverse(registeredConverters);
-
-		this.converters = Collections.unmodifiableList(registeredConverters);
-		this.simpleTypeHolder = new SimpleTypeHolder(customSimpleTypes,
-				converterConfiguration.getStoreConversions().getStoreTypeHolder());
 		this.propertyValueConversions = converterConfiguration.getPropertyValueConversions();
+		this.converters = initializeConverters();
+		this.simpleTypeHolder = initializeSimpleTypeHolder();
 	}
 
 	/**
@@ -145,6 +134,35 @@ public class CustomConversions {
 	 */
 	public CustomConversions(StoreConversions storeConversions, Collection<?> converters) {
 		this(new ConverterConfiguration(storeConversions, new ArrayList<>(converters)));
+	}
+
+	/**
+	 * Initializes and registers converters, following the original flow:
+	 * collect → filter (supported + shouldRegister) → register → distinct → reverse
+	 */
+	private List<Object> initializeConverters() {
+		List<ConverterRegistrationIntent> potentialRegistrations = collectPotentialConverterRegistrations(
+				converterConfiguration.getStoreConversions(), converterConfiguration.getUserConverters());
+
+		List<Object> registeredConverters = potentialRegistrations.stream()
+				.filter(this::isSupportedConverter)
+				.filter(this::shouldRegister)
+				.map(ConverterRegistrationIntent::getConverterRegistration)
+				.map(this::register)
+				.distinct()
+				.collect(Collectors.toCollection(ArrayList::new));
+
+		Collections.reverse(registeredConverters);
+		return Collections.unmodifiableList(registeredConverters);
+	}
+
+	/**
+	 * Initializes the SimpleTypeHolder
+	 */
+	private SimpleTypeHolder initializeSimpleTypeHolder() {
+		return new SimpleTypeHolder(
+				customSimpleTypes,
+				converterConfiguration.getStoreConversions().getStoreTypeHolder());
 	}
 
 	private static boolean hasAssignableSourceType(ConvertiblePair pair, Class<?> sourceType) {
@@ -515,17 +533,25 @@ public class CustomConversions {
 
 	/**
 	 * Value object to cache custom conversion targets.
+	 * Implements double-checked locking for thread safety.
 	 *
 	 * @author Mark Paluch
 	 */
 	static class ConversionTargetsCache {
 
-		private volatile Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>();
+		/**
+		 * Caches TargetTypes objects per source type, for thread safety uses volatile reference.
+		 */
+		private volatile Map<Class<?>, TargetTypes> sourceTypeToTargetTypes = new HashMap<>();
 
 		/**
-		 * Get or compute a target type given its {@code sourceType}. Returns a cached {@link Optional} if the value
-		 * (present/absent target) was computed once. Otherwise, uses a {@link Function mappingFunction} to determine a
-		 * possibly existing target type.
+		 * Marker type for queries without a specific requested target type.
+		 */
+		interface AbsentTargetTypeMarker {}
+
+		/**
+		 * Get or compute a target type given its {@code sourceType} (without requested target type).
+		 * Returns a cached value (present/absent target) if computed before.
 		 *
 		 * @param sourceType must not be {@literal null}.
 		 * @param mappingFunction must not be {@literal null}.
@@ -537,9 +563,8 @@ public class CustomConversions {
 		}
 
 		/**
-		 * Get or compute a target type given its {@code sourceType} and {@code targetType}. Returns a cached
-		 * {@link Optional} if the value (present/absent target) was computed once. Otherwise, uses a {@link Function
-		 * mappingFunction} to determine a possibly existing target type.
+		 * Get or compute a target type given its {@code sourceType} and {@code targetType}.
+		 * Returns a cached value (present/absent target) if computed before.
 		 *
 		 * @param sourceType must not be {@literal null}.
 		 * @param targetType must not be {@literal null}.
@@ -549,80 +574,87 @@ public class CustomConversions {
 		public @Nullable Class<?> computeIfAbsent(Class<?> sourceType, Class<?> targetType,
 				Function<ConvertiblePair, Class<?>> mappingFunction) {
 
-			TargetTypes targetTypes = customReadTargetTypes.get(sourceType);
+			// First check without locking for performance
+			TargetTypes targetTypes = sourceTypeToTargetTypes.get(sourceType);
 
 			if (targetTypes == null) {
-
 				synchronized (this) {
-
-					TargetTypes customReadTarget = customReadTargetTypes.get(sourceType);
-					if (customReadTarget != null) {
-						targetTypes = customReadTarget;
+					// Second check inside lock to avoid race conditions
+					TargetTypes existingTargetTypes = sourceTypeToTargetTypes.get(sourceType);
+					if (existingTargetTypes != null) {
+						targetTypes = existingTargetTypes;
 					} else {
-
-						Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>(this.customReadTargetTypes);
+						// Create new copy of the map to preserve immutability
+						Map<Class<?>, TargetTypes> newSourceTypeToTargetTypes = new HashMap<>(sourceTypeToTargetTypes);
 						targetTypes = new TargetTypes(sourceType);
-						customReadTargetTypes.put(sourceType, targetTypes);
-						this.customReadTargetTypes = customReadTargetTypes;
+						newSourceTypeToTargetTypes.put(sourceType, targetTypes);
+						// Volatile write to ensure visibility across threads
+						sourceTypeToTargetTypes = newSourceTypeToTargetTypes;
 					}
 				}
 			}
 
 			return targetTypes.computeIfAbsent(targetType, mappingFunction);
 		}
-
-		/**
-		 * Marker type for absent target type caching.
-		 */
-		interface AbsentTargetTypeMarker {}
 	}
 
 	/**
 	 * Value object for a specific {@code Class source type} to determine possible target conversion types.
+	 * Implements double-checked locking for thread safety.
 	 *
 	 * @author Mark Paluch
 	 */
 	static class TargetTypes {
 
 		private final Class<?> sourceType;
-		private volatile Map<Class<?>, Class<?>> conversionTargets = new HashMap<>();
+
+		/**
+		 * Caches conversion target types per requested target type.
+		 * Uses Void.class as a sentinel value for absent (null) targets.
+		 * Volatile reference ensures thread safety.
+		 */
+		private volatile Map<Class<?>, Class<?>> targetTypeToResult = new HashMap<>();
 
 		TargetTypes(Class<?> sourceType) {
 			this.sourceType = sourceType;
 		}
 
 		/**
-		 * Get or compute a target type given its {@code targetType}. Returns a cached {@link Optional} if the value
-		 * (present/absent target) was computed once. Otherwise, uses a {@link Function mappingFunction} to determine a
-		 * possibly existing target type.
+		 * Get or compute a target type given its {@code targetType}.
+		 * Returns a cached value (present/absent target) if computed before.
 		 *
 		 * @param targetType must not be {@literal null}.
 		 * @param mappingFunction must not be {@literal null}.
-		 * @return the optional target type.
+		 * @return the optional target type (null if no conversion exists).
 		 */
 		public @Nullable Class<?> computeIfAbsent(Class<?> targetType,
 				Function<ConvertiblePair, Class<?>> mappingFunction) {
 
-			Class<?> optionalTarget = conversionTargets.get(targetType);
+			// First check without locking for performance
+			Class<?> cachedResult = targetTypeToResult.get(targetType);
 
-			if (optionalTarget == null) {
-
+			if (cachedResult == null) {
 				synchronized (this) {
-
-					Class<?> conversionTarget = conversionTargets.get(targetType);
-					if (conversionTarget != null) {
-						optionalTarget = conversionTarget;
+					// Second check inside lock to avoid race conditions
+					Class<?> existingResult = targetTypeToResult.get(targetType);
+					if (existingResult != null) {
+						cachedResult = existingResult;
 					} else {
-
-						optionalTarget = mappingFunction.apply(new ConvertiblePair(sourceType, targetType));
-						Map<Class<?>, Class<?>> conversionTargets = new HashMap<>(this.conversionTargets);
-						conversionTargets.put(targetType, optionalTarget == null ? Void.class : optionalTarget);
-						this.conversionTargets = conversionTargets;
+						// Compute the actual conversion target
+						Class<?> computedResult = mappingFunction.apply(new ConvertiblePair(sourceType, targetType));
+						// Create new copy of the map to preserve immutability
+						Map<Class<?>, Class<?>> newTargetTypeToResult = new HashMap<>(targetTypeToResult);
+						// Use Void.class as sentinel for absent target
+						newTargetTypeToResult.put(targetType, computedResult == null ? Void.class : computedResult);
+						// Volatile write to ensure visibility across threads
+						targetTypeToResult = newTargetTypeToResult;
+						cachedResult = newTargetTypeToResult.get(targetType);
 					}
 				}
 			}
 
-			return Void.class.equals(optionalTarget) ? null : optionalTarget;
+			// Resolve sentinel value back to null
+			return Void.class.equals(cachedResult) ? null : cachedResult;
 		}
 	}
 
