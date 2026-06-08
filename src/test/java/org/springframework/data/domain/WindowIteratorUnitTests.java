@@ -131,6 +131,160 @@ class WindowIteratorUnitTests {
 		assertThat(capturedResult).containsExactly("a", "b", "c", "d");
 	}
 
+	@Test
+	void repeatedHasNextDoesNotReloadCurrentWindow() {
+
+		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
+		when(fkt.apply(any())).thenReturn(Window.from(List.of("a", "b"), value -> ScrollPosition.offset(), true));
+
+		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
+
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.hasNext()).isTrue();
+
+		verify(fkt, times(1)).apply(any());
+	}
+
+	@Test
+	void terminalHasNextDoesNotReloadAfterExhaustion() {
+
+		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
+		when(fkt.apply(any())).thenReturn(Window.from(List.of("a"), value -> ScrollPosition.offset(), false));
+
+		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
+
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("a");
+		assertThat(iterator.hasNext()).isFalse();
+		assertThat(iterator.hasNext()).isFalse();
+		assertThat(iterator.hasNext()).isFalse();
+
+		verify(fkt, times(1)).apply(any());
+	}
+
+	@Test
+	void nextLoadsFollowingWindowUsingLastForwardPosition() {
+
+		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
+		Window<String> firstWindow = Window.from(List.of("a", "b"), value -> ScrollPosition.offset(value), true);
+		Window<String> secondWindow = Window.from(List.of("c"), value -> ScrollPosition.offset(2 + value), false);
+
+		when(fkt.apply(ScrollPosition.offset())).thenReturn(firstWindow);
+		when(fkt.apply(ScrollPosition.offset(1))).thenReturn(secondWindow);
+
+		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
+
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("a");
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("b");
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("c");
+
+		verify(fkt).apply(ScrollPosition.offset());
+		verify(fkt).apply(ScrollPosition.offset(1));
+	}
+
+	@Test
+	void backwardKeysetUsesFirstPositionForNextWindow() {
+
+		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
+		
+		Window<String> firstWindow = Window.from(List.of("a", "b"), 
+				value -> KeysetScrollPosition.of(Map.of("k", value), Direction.BACKWARD), true);
+		Window<String> secondWindow = Window.from(List.of("c"), 
+				value -> KeysetScrollPosition.of(Map.of("k", 2 + value), Direction.BACKWARD), false);
+
+		when(fkt.apply(ScrollPosition.keyset().backward())).thenReturn(firstWindow);
+		when(fkt.apply(KeysetScrollPosition.of(Map.of("k", 0), Direction.BACKWARD))).thenReturn(secondWindow);
+
+		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.keyset().backward());
+
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("b");
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("a");
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("c");
+
+		verify(fkt).apply(ScrollPosition.keyset().backward());
+		verify(fkt).apply(KeysetScrollPosition.of(Map.of("k", 0), Direction.BACKWARD));
+	}
+
+	@Test
+	void nullWindowFromFunctionFailsWithIllegalStateException() {
+
+		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
+		when(fkt.apply(any())).thenReturn(null);
+
+		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
+
+		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext);
+	}
+
+	@Test
+	void emptyWindowWithHasNextFailsWithIllegalStateException() {
+
+		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
+		when(fkt.apply(any())).thenReturn(Window.from(Collections.emptyList(), value -> ScrollPosition.offset(), true));
+
+		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
+
+		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext);
+	}
+
+	@Test
+	void nonProgressingScrollPositionFailsWithIllegalStateException() {
+
+		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
+		// Returns same position (offset 0) to simulate non-progressing
+		when(fkt.apply(any())).thenReturn(Window.from(List.of("a"), value -> ScrollPosition.offset(0), true));
+
+		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset(0));
+
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("a");
+		
+		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext);
+	}
+
+	@Test
+	void positionAtFailureDoesNotAdvanceIteratorState() {
+
+		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
+		
+		Window<String> window = mock(Window.class);
+		when(window.iterator()).thenReturn(List.of("a").iterator());
+		when(window.hasNext()).thenReturn(true);
+		when(window.isEmpty()).thenReturn(false);
+		when(window.size()).thenReturn(1);
+		when(window.positionAt(0)).thenThrow(new IllegalStateException("position error"));
+
+		when(fkt.apply(any())).thenReturn(window);
+
+		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
+
+		assertThat(iterator.hasNext()).isTrue();
+		assertThat(iterator.next()).isEqualTo("a");
+
+		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext)
+				.withMessage("position error");
+				
+		// Call hasNext again should still throw the same exception and not be advanced to next window
+		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext)
+				.withMessage("position error");
+	}
+
+	@Test
+	void nextStillThrowsNoSuchElementExceptionWhenNoDataAvailable() {
+
+		Window<Object> window = Window.from(Collections.emptyList(), value -> ScrollPosition.offset());
+		WindowIterator<Object> iterator = WindowIterator.of(it -> window).startingAt(ScrollPosition.offset());
+
+		assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(iterator::next);
+	}
+
 	@Test // GH-2151, GH-2857
 	void considersBackwardKeysetScrolling() {
 

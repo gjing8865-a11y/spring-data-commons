@@ -80,6 +80,9 @@ public class WindowIterator<T> implements Iterator<T> {
 		do {
 			if (currentWindow == null) {
 				currentWindow = windowFunction.apply(currentPosition);
+				if (currentWindow == null) {
+					throw new IllegalStateException("Window function returned null");
+				}
 			}
 
 			if (currentIterator == null) {
@@ -93,7 +96,16 @@ public class WindowIterator<T> implements Iterator<T> {
 
 			if (currentWindow != null && currentWindow.hasNext()) {
 
-				currentPosition = getNextPosition(currentPosition, currentWindow);
+				if (currentWindow.isEmpty()) {
+					throw new IllegalStateException("Window is empty but claims to have next");
+				}
+
+				ScrollPosition nextPosition = getNextPosition(currentPosition, currentWindow);
+				if (nextPosition.equals(currentPosition)) {
+					throw new IllegalStateException("Scroll position did not progress: " + currentPosition);
+				}
+
+				currentPosition = nextPosition;
 				currentIterator = null;
 				currentWindow = null;
 				continue;

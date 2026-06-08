@@ -17,6 +17,9 @@ package org.springframework.data.domain;
 
 import static org.assertj.core.api.Assertions.*;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.function.IntFunction;
 
@@ -66,5 +69,134 @@ class WindowUnitTests {
 
 		// by object
 		assertThat(window.positionAt(Integer.valueOf(1))).isEqualTo(ScrollPosition.offset(0));
+	}
+
+	@Test
+	void windowTakesSnapshotAgainstSourceListAdd() {
+
+		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
+		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
+
+		source.add(4);
+
+		assertThat(window.size()).isEqualTo(3);
+		assertThat(window.getContent()).containsExactly(1, 2, 3);
+	}
+
+	@Test
+	void windowTakesSnapshotAgainstSourceListRemove() {
+
+		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
+		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
+
+		source.remove(Integer.valueOf(2));
+
+		assertThat(window.size()).isEqualTo(3);
+		assertThat(window.getContent()).containsExactly(1, 2, 3);
+	}
+
+	@Test
+	void windowTakesSnapshotAgainstSourceListSet() {
+
+		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
+		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
+
+		source.set(1, 99);
+
+		assertThat(window.size()).isEqualTo(3);
+		assertThat(window.getContent()).containsExactly(1, 2, 3);
+	}
+
+	@Test
+	void windowTakesSnapshotAgainstSourceListClear() {
+
+		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
+		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
+
+		source.clear();
+
+		assertThat(window.size()).isEqualTo(3);
+		assertThat(window.getContent()).containsExactly(1, 2, 3);
+	}
+
+	@Test
+	void windowContentRejectsAddRemoveSetClear() {
+
+		Window<Integer> window = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(0));
+		List<Integer> content = window.getContent();
+
+		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(() -> content.add(4));
+		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(() -> content.remove(Integer.valueOf(2)));
+		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(() -> content.set(1, 99));
+		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(content::clear);
+	}
+
+	@Test
+	void windowIteratorRejectsRemove() {
+
+		Window<Integer> window = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(0));
+		Iterator<Integer> iterator = window.iterator();
+
+		iterator.next();
+		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(iterator::remove);
+	}
+
+	@Test
+	void positionAtUsesConstructionSnapshot() {
+
+		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
+		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
+
+		source.add(0, 99); // Shift elements in source
+
+		// Index 1 in the snapshot is still 2, offset should be 1
+		assertThat(window.positionAt(1)).isEqualTo(ScrollPosition.offset(1));
+		assertThat(window.getContent().get(1)).isEqualTo(2);
+	}
+
+	@Test
+	void positionAtObjectUsesConstructionSnapshot() {
+
+		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
+		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
+
+		source.add(0, 99);
+
+		// Object 2 in snapshot is at index 1
+		assertThat(window.positionAt(Integer.valueOf(2))).isEqualTo(ScrollPosition.offset(1));
+	}
+
+	@Test
+	void mappedWindowIsImmutableSnapshot() {
+
+		Window<Integer> window = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(0));
+		Window<String> mapped = window.map(String::valueOf);
+
+		List<String> content = mapped.getContent();
+		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(() -> content.add("4"));
+	}
+
+	@Test
+	void mappedWindowPreservesPositionFunction() {
+
+		Window<Integer> window = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(10));
+		Window<String> mapped = window.map(String::valueOf);
+
+		assertThat(mapped.positionAt(0)).isEqualTo(ScrollPosition.offset(10));
+		assertThat(mapped.positionAt("2")).isEqualTo(ScrollPosition.offset(11));
+	}
+
+	@Test
+	void mappedWindowPreservesHasNext() {
+
+		Window<Integer> window = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(0), true);
+		Window<String> mapped = window.map(String::valueOf);
+
+		assertThat(mapped.hasNext()).isTrue();
+
+		Window<Integer> window2 = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(0), false);
+		Window<String> mapped2 = window2.map(String::valueOf);
+
+		assertThat(mapped2.hasNext()).isFalse();
 	}
 }

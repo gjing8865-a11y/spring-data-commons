@@ -1,0 +1,367 @@
+diff --git a/src/main/java/org/springframework/data/domain/WindowImpl.java b/src/main/java/org/springframework/data/domain/WindowImpl.java
+index b2d2b51d..67eed7d2 100644
+--- a/src/main/java/org/springframework/data/domain/WindowImpl.java
++++ b/src/main/java/org/springframework/data/domain/WindowImpl.java
+@@ -15,6 +15,8 @@
+  */
+ package org.springframework.data.domain;
+ 
++import java.util.ArrayList;
++import java.util.Collections;
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.function.Function;
+@@ -44,7 +46,7 @@ class WindowImpl<T> implements Window<T> {
+ 		Assert.notNull(items, "List of items must not be null");
+ 		Assert.notNull(positionFunction, "Position function must not be null");
+ 
+-		this.items = items;
++		this.items = Collections.unmodifiableList(new ArrayList<>(items));
+ 		this.positionFunction = positionFunction;
+ 		this.hasNext = hasNext;
+ 	}
+diff --git a/src/main/java/org/springframework/data/support/WindowIterator.java b/src/main/java/org/springframework/data/support/WindowIterator.java
+index 7535c999..19ae1665 100644
+--- a/src/main/java/org/springframework/data/support/WindowIterator.java
++++ b/src/main/java/org/springframework/data/support/WindowIterator.java
+@@ -80,6 +80,9 @@ public class WindowIterator<T> implements Iterator<T> {
+ 		do {
+ 			if (currentWindow == null) {
+ 				currentWindow = windowFunction.apply(currentPosition);
++				if (currentWindow == null) {
++					throw new IllegalStateException("Window function returned null");
++				}
+ 			}
+ 
+ 			if (currentIterator == null) {
+@@ -93,7 +96,16 @@ public class WindowIterator<T> implements Iterator<T> {
+ 
+ 			if (currentWindow != null && currentWindow.hasNext()) {
+ 
+-				currentPosition = getNextPosition(currentPosition, currentWindow);
++				if (currentWindow.isEmpty()) {
++					throw new IllegalStateException("Window is empty but claims to have next");
++				}
++
++				ScrollPosition nextPosition = getNextPosition(currentPosition, currentWindow);
++				if (nextPosition.equals(currentPosition)) {
++					throw new IllegalStateException("Scroll position did not progress: " + currentPosition);
++				}
++
++				currentPosition = nextPosition;
+ 				currentIterator = null;
+ 				currentWindow = null;
+ 				continue;
+diff --git a/src/test/java/org/springframework/data/domain/WindowIteratorUnitTests.java b/src/test/java/org/springframework/data/domain/WindowIteratorUnitTests.java
+index 52dc3536..e7fb9648 100644
+--- a/src/test/java/org/springframework/data/domain/WindowIteratorUnitTests.java
++++ b/src/test/java/org/springframework/data/domain/WindowIteratorUnitTests.java
+@@ -131,6 +131,160 @@ class WindowIteratorUnitTests {
+ 		assertThat(capturedResult).containsExactly("a", "b", "c", "d");
+ 	}
+ 
++	@Test
++	void repeatedHasNextDoesNotReloadCurrentWindow() {
++
++		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
++		when(fkt.apply(any())).thenReturn(Window.from(List.of("a", "b"), value -> ScrollPosition.offset(), true));
++
++		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
++
++		assertThat(iterator.hasNext()).isTrue();
++		assertThat(iterator.hasNext()).isTrue();
++		assertThat(iterator.hasNext()).isTrue();
++
++		verify(fkt, times(1)).apply(any());
++	}
++
++	@Test
++	void terminalHasNextDoesNotReloadAfterExhaustion() {
++
++		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
++		when(fkt.apply(any())).thenReturn(Window.from(List.of("a"), value -> ScrollPosition.offset(), false));
++
++		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
++
++		assertThat(iterator.hasNext()).isTrue();
++		assertThat(iterator.next()).isEqualTo("a");
++		assertThat(iterator.hasNext()).isFalse();
++		assertThat(iterator.hasNext()).isFalse();
++		assertThat(iterator.hasNext()).isFalse();
++
++		verify(fkt, times(1)).apply(any());
++	}
++
++	@Test
++	void nextLoadsFollowingWindowUsingLastForwardPosition() {
++
++		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
++		Window<String> firstWindow = Window.from(List.of("a", "b"), value -> ScrollPosition.offset(value), true);
++		Window<String> secondWindow = Window.from(List.of("c"), value -> ScrollPosition.offset(2 + value), false);
++
++		when(fkt.apply(ScrollPosition.offset())).thenReturn(firstWindow);
++		when(fkt.apply(ScrollPosition.offset(1))).thenReturn(secondWindow);
++
++		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
++
++		assertThat(iterator.hasNext()).isTrue();
++		assertThat(iterator.next()).isEqualTo("a");
++		assertThat(iterator.hasNext()).isTrue();
++		assertThat(iterator.next()).isEqualTo("b");
++		assertThat(iterator.hasNext()).isTrue();
++		assertThat(iterator.next()).isEqualTo("c");
++
++		verify(fkt).apply(ScrollPosition.offset());
++		verify(fkt).apply(ScrollPosition.offset(1));
++	}
++
++	@Test
++	void backwardKeysetUsesFirstPositionForNextWindow() {
++
++		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
++		
++		Window<String> firstWindow = Window.from(List.of("a", "b"), 
++				value -> KeysetScrollPosition.of(Map.of("k", value), Direction.BACKWARD), true);
++		Window<String> secondWindow = Window.from(List.of("c"), 
++				value -> KeysetScrollPosition.of(Map.of("k", 2 + value), Direction.BACKWARD), false);
++
++		when(fkt.apply(ScrollPosition.keyset().backward())).thenReturn(firstWindow);
++		when(fkt.apply(KeysetScrollPosition.of(Map.of("k", 0), Direction.BACKWARD))).thenReturn(secondWindow);
++
++		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.keyset().backward());
++
++		assertThat(iterator.hasNext()).isTrue();
++		assertThat(iterator.next()).isEqualTo("b");
++		assertThat(iterator.hasNext()).isTrue();
++		assertThat(iterator.next()).isEqualTo("a");
++		assertThat(iterator.hasNext()).isTrue();
++		assertThat(iterator.next()).isEqualTo("c");
++
++		verify(fkt).apply(ScrollPosition.keyset().backward());
++		verify(fkt).apply(KeysetScrollPosition.of(Map.of("k", 0), Direction.BACKWARD));
++	}
++
++	@Test
++	void nullWindowFromFunctionFailsWithIllegalStateException() {
++
++		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
++		when(fkt.apply(any())).thenReturn(null);
++
++		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
++
++		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext);
++	}
++
++	@Test
++	void emptyWindowWithHasNextFailsWithIllegalStateException() {
++
++		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
++		when(fkt.apply(any())).thenReturn(Window.from(Collections.emptyList(), value -> ScrollPosition.offset(), true));
++
++		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
++
++		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext);
++	}
++
++	@Test
++	void nonProgressingScrollPositionFailsWithIllegalStateException() {
++
++		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
++		// Returns same position (offset 0) to simulate non-progressing
++		when(fkt.apply(any())).thenReturn(Window.from(List.of("a"), value -> ScrollPosition.offset(0), true));
++
++		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset(0));
++
++		assertThat(iterator.hasNext()).isTrue();
++		assertThat(iterator.next()).isEqualTo("a");
++		
++		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext);
++	}
++
++	@Test
++	void positionAtFailureDoesNotAdvanceIteratorState() {
++
++		Function<ScrollPosition, Window<String>> fkt = mock(Function.class);
++		
++		Window<String> window = mock(Window.class);
++		when(window.iterator()).thenReturn(List.of("a").iterator());
++		when(window.hasNext()).thenReturn(true);
++		when(window.isEmpty()).thenReturn(false);
++		when(window.size()).thenReturn(1);
++		when(window.positionAt(0)).thenThrow(new IllegalStateException("position error"));
++
++		when(fkt.apply(any())).thenReturn(window);
++
++		WindowIterator<String> iterator = WindowIterator.of(fkt).startingAt(ScrollPosition.offset());
++
++		assertThat(iterator.hasNext()).isTrue();
++		assertThat(iterator.next()).isEqualTo("a");
++
++		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext)
++				.withMessage("position error");
++				
++		// Call hasNext again should still throw the same exception and not be advanced to next window
++		assertThatExceptionOfType(IllegalStateException.class).isThrownBy(iterator::hasNext)
++				.withMessage("position error");
++	}
++
++	@Test
++	void nextStillThrowsNoSuchElementExceptionWhenNoDataAvailable() {
++
++		Window<Object> window = Window.from(Collections.emptyList(), value -> ScrollPosition.offset());
++		WindowIterator<Object> iterator = WindowIterator.of(it -> window).startingAt(ScrollPosition.offset());
++
++		assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(iterator::next);
++	}
++
+ 	@Test // GH-2151, GH-2857
+ 	void considersBackwardKeysetScrolling() {
+ 
+diff --git a/src/test/java/org/springframework/data/domain/WindowUnitTests.java b/src/test/java/org/springframework/data/domain/WindowUnitTests.java
+index e58a4f1e..f959f631 100644
+--- a/src/test/java/org/springframework/data/domain/WindowUnitTests.java
++++ b/src/test/java/org/springframework/data/domain/WindowUnitTests.java
+@@ -17,6 +17,9 @@ package org.springframework.data.domain;
+ 
+ import static org.assertj.core.api.Assertions.*;
+ 
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Iterator;
+ import java.util.List;
+ import java.util.function.IntFunction;
+ 
+@@ -67,4 +70,133 @@ class WindowUnitTests {
+ 		// by object
+ 		assertThat(window.positionAt(Integer.valueOf(1))).isEqualTo(ScrollPosition.offset(0));
+ 	}
++
++	@Test
++	void windowTakesSnapshotAgainstSourceListAdd() {
++
++		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
++		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
++
++		source.add(4);
++
++		assertThat(window.size()).isEqualTo(3);
++		assertThat(window.getContent()).containsExactly(1, 2, 3);
++	}
++
++	@Test
++	void windowTakesSnapshotAgainstSourceListRemove() {
++
++		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
++		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
++
++		source.remove(Integer.valueOf(2));
++
++		assertThat(window.size()).isEqualTo(3);
++		assertThat(window.getContent()).containsExactly(1, 2, 3);
++	}
++
++	@Test
++	void windowTakesSnapshotAgainstSourceListSet() {
++
++		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
++		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
++
++		source.set(1, 99);
++
++		assertThat(window.size()).isEqualTo(3);
++		assertThat(window.getContent()).containsExactly(1, 2, 3);
++	}
++
++	@Test
++	void windowTakesSnapshotAgainstSourceListClear() {
++
++		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
++		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
++
++		source.clear();
++
++		assertThat(window.size()).isEqualTo(3);
++		assertThat(window.getContent()).containsExactly(1, 2, 3);
++	}
++
++	@Test
++	void windowContentRejectsAddRemoveSetClear() {
++
++		Window<Integer> window = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(0));
++		List<Integer> content = window.getContent();
++
++		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(() -> content.add(4));
++		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(() -> content.remove(Integer.valueOf(2)));
++		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(() -> content.set(1, 99));
++		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(content::clear);
++	}
++
++	@Test
++	void windowIteratorRejectsRemove() {
++
++		Window<Integer> window = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(0));
++		Iterator<Integer> iterator = window.iterator();
++
++		iterator.next();
++		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(iterator::remove);
++	}
++
++	@Test
++	void positionAtUsesConstructionSnapshot() {
++
++		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
++		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
++
++		source.add(0, 99); // Shift elements in source
++
++		// Index 1 in the snapshot is still 2, offset should be 1
++		assertThat(window.positionAt(1)).isEqualTo(ScrollPosition.offset(1));
++		assertThat(window.getContent().get(1)).isEqualTo(2);
++	}
++
++	@Test
++	void positionAtObjectUsesConstructionSnapshot() {
++
++		List<Integer> source = new ArrayList<>(Arrays.asList(1, 2, 3));
++		Window<Integer> window = Window.from(source, OffsetScrollPosition.positionFunction(0));
++
++		source.add(0, 99);
++
++		// Object 2 in snapshot is at index 1
++		assertThat(window.positionAt(Integer.valueOf(2))).isEqualTo(ScrollPosition.offset(1));
++	}
++
++	@Test
++	void mappedWindowIsImmutableSnapshot() {
++
++		Window<Integer> window = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(0));
++		Window<String> mapped = window.map(String::valueOf);
++
++		List<String> content = mapped.getContent();
++		assertThatExceptionOfType(UnsupportedOperationException.class).isThrownBy(() -> content.add("4"));
++	}
++
++	@Test
++	void mappedWindowPreservesPositionFunction() {
++
++		Window<Integer> window = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(10));
++		Window<String> mapped = window.map(String::valueOf);
++
++		assertThat(mapped.positionAt(0)).isEqualTo(ScrollPosition.offset(10));
++		assertThat(mapped.positionAt("2")).isEqualTo(ScrollPosition.offset(11));
++	}
++
++	@Test
++	void mappedWindowPreservesHasNext() {
++
++		Window<Integer> window = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(0), true);
++		Window<String> mapped = window.map(String::valueOf);
++
++		assertThat(mapped.hasNext()).isTrue();
++
++		Window<Integer> window2 = Window.from(Arrays.asList(1, 2, 3), OffsetScrollPosition.positionFunction(0), false);
++		Window<String> mapped2 = window2.map(String::valueOf);
++
++		assertThat(mapped2.hasNext()).isFalse();
++	}
+ }
