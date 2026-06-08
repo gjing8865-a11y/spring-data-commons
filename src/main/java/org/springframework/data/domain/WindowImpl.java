@@ -15,6 +15,8 @@
  */
 package org.springframework.data.domain;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.function.Function;
@@ -44,7 +46,7 @@ class WindowImpl<T> implements Window<T> {
 		Assert.notNull(items, "List of items must not be null");
 		Assert.notNull(positionFunction, "Position function must not be null");
 
-		this.items = items;
+		this.items = Collections.unmodifiableList(new ArrayList<>(items));
 		this.positionFunction = positionFunction;
 		this.hasNext = hasNext;
 	}

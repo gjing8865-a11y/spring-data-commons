@@ -53,8 +53,9 @@ public class WindowIterator<T> implements Iterator<T> {
 	private ScrollPosition currentPosition;
 
 	private @Nullable Window<T> currentWindow;
-
 	private @Nullable Iterator<T> currentIterator;
+
+	private boolean exhausted;
 
 	/**
 	 * Entrypoint to create a new {@link WindowIterator} for the given windowFunction.
@@ -76,30 +77,32 @@ public class WindowIterator<T> implements Iterator<T> {
 	@Override
 	public boolean hasNext() {
 
-		// use while loop instead of recursion to fetch the next window.
+		if (exhausted) {
+			return false;
+		}
+
 		do {
-			if (currentWindow == null) {
-				currentWindow = windowFunction.apply(currentPosition);
-			}
+			Window<T> window = getCurrentWindow();
+			Iterator<T> iterator = getCurrentIterator(window);
 
-			if (currentIterator == null) {
-				currentIterator = isBackwardsScrolling(currentPosition) ? new ReverseListIterator<>(currentWindow.getContent())
-						: currentWindow.iterator();
-			}
-
-			if (currentIterator.hasNext()) {
+			if (iterator.hasNext()) {
 				return true;
 			}
 
-			if (currentWindow != null && currentWindow.hasNext()) {
-
-				currentPosition = getNextPosition(currentPosition, currentWindow);
-				currentIterator = null;
-				currentWindow = null;
-				continue;
+			if (!window.hasNext()) {
+				exhausted = true;
+				return false;
 			}
 
-			return false;
+			ScrollPosition nextPosition = getNextPosition(currentPosition, window);
+
+			if (nextPosition.equals(currentPosition)) {
+				throw new IllegalStateException("Window did not advance ScrollPosition from %s".formatted(currentPosition));
+			}
+
+			currentPosition = nextPosition;
+			currentIterator = null;
+			currentWindow = null;
 		} while (true);
 	}
 
@@ -114,7 +117,34 @@ public class WindowIterator<T> implements Iterator<T> {
 		return currentIterator.next();
 	}
 
+	private Window<T> getCurrentWindow() {
+
+		if (currentWindow == null) {
+			currentWindow = windowFunction.apply(currentPosition);
+		}
+
+		if (currentWindow == null) {
+			throw new IllegalStateException("Window function must not return null");
+		}
+
+		return currentWindow;
+	}
+
+	private Iterator<T> getCurrentIterator(Window<T> window) {
+
+		if (currentIterator == null) {
+			currentIterator = isBackwardsScrolling(currentPosition) ? new ReverseListIterator<>(window.getContent())
+					: window.iterator();
+		}
+
+		return currentIterator;
+	}
+
 	private static ScrollPosition getNextPosition(ScrollPosition currentPosition, Window<?> window) {
+
+		if (window.isEmpty()) {
+			throw new IllegalStateException("Window must not be empty when hasNext is true");
+		}
 
 		if (isBackwardsScrolling(currentPosition)) {
 			return window.positionAt(0);
@@ -179,7 +209,7 @@ public class WindowIterator<T> implements Iterator<T> {
 
 		@Override
 		public void remove() {
-			delegate.remove();
+			throw new UnsupportedOperationException();
 		}
 	}
 }
