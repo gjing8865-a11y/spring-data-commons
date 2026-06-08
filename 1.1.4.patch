@@ -1,0 +1,80 @@
+diff --git a/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java b/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java
+index 9d4ec5fb..04019a8c 100644
+--- a/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java
++++ b/src/main/java/org/springframework/data/mapping/model/ReflectionEntityInstantiator.java
+@@ -131,7 +131,9 @@ enum ReflectionEntityInstantiator implements EntityInstantiator {
+ 					ctype = ctype.getComponentType();
+ 					dims++;
+ 				}
+-				return (T) Array.newInstance(clazz, dims);
++				int[] dimensions = new int[dims];
++				Arrays.fill(dimensions, 0);
++				return (T) Array.newInstance(ctype, dimensions);
+ 			} else {
+ 				return BeanUtils.instantiateClass(entity.getType());
+ 			}
+diff --git a/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java b/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java
+index 00bedb42..9283c189 100755
+--- a/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java
++++ b/src/test/java/org/springframework/data/mapping/model/ClassGeneratingEntityInstantiatorUnitTests.java
+@@ -70,9 +70,25 @@ class ClassGeneratingEntityInstantiatorUnitTests<P extends PersistentProperty<P>
+ 	@Test
+ 	void instantiatesArrayCorrectly() {
+ 
+-		doReturn(String[][].class).when(entity).getType();
+-
+-		this.instance.createInstance(entity, provider);
++		doReturn(String[][].class).when(entity).getType());
++		Object instance = this.instance.createInstance(entity, provider);
++		assertThat(instance).isInstanceOf(String[][].class);
++		assertThat(instance.getClass()).isEqualTo(String[][].class);
++
++		doReturn(String[].class).when(entity).getType());
++		instance = this.instance.createInstance(entity, provider);
++		assertThat(instance).isInstanceOf(String[].class);
++		assertThat(instance.getClass()).isEqualTo(String[].class);
++
++		doReturn(int[].class).when(entity).getType());
++		instance = this.instance.createInstance(entity, provider);
++		assertThat(instance).isInstanceOf(int[].class);
++		assertThat(instance.getClass()).isEqualTo(int[].class);
++
++		doReturn(int[][].class).when(entity).getType());
++		instance = this.instance.createInstance(entity, provider);
++		assertThat(instance).isInstanceOf(int[][].class);
++		assertThat(instance.getClass()).isEqualTo(int[][].class);
+ 	}
+ 
+ 	@Test // DATACMNS-1126
+diff --git a/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java b/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java
+index 16ca8ea5..9201b1c2 100755
+--- a/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java
++++ b/src/test/java/org/springframework/data/mapping/model/ReflectionEntityInstantiatorUnitTests.java
+@@ -59,8 +59,25 @@ class ReflectionEntityInstantiatorUnitTests<P extends PersistentProperty<P>> {
+ 	@Test
+ 	void instantiatesArrayCorrectly() {
+ 
+-		doReturn(String[][].class).when(entity).getType();
+-		INSTANCE.createInstance(entity, provider);
++		doReturn(String[][].class).when(entity).getType());
++		Object instance = INSTANCE.createInstance(entity, provider);
++		assertThat(instance).isInstanceOf(String[][].class);
++		assertThat(instance.getClass()).isEqualTo(String[][].class);
++
++		doReturn(String[].class).when(entity).getType());
++		instance = INSTANCE.createInstance(entity, provider);
++		assertThat(instance).isInstanceOf(String[].class);
++		assertThat(instance.getClass()).isEqualTo(String[].class);
++
++		doReturn(int[].class).when(entity).getType());
++		instance = INSTANCE.createInstance(entity, provider);
++		assertThat(instance).isInstanceOf(int[].class);
++		assertThat(instance.getClass()).isEqualTo(int[].class);
++
++		doReturn(int[][].class).when(entity).getType());
++		instance = INSTANCE.createInstance(entity, provider);
++		assertThat(instance).isInstanceOf(int[][].class);
++		assertThat(instance.getClass()).isEqualTo(int[][].class);
+ 	}
+ 
+ 	@Test // DATACMNS-1126
