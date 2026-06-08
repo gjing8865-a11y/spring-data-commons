@@ -61,14 +61,24 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 
 		var reference = ScrollPosition.offset(5);
 
-		assertSupportedAndResolvedTo(getRequestWithOffset(reference, null), PARAMETER, reference);
+		assertSupportedAndResolvedTo(sut, getRequestWithOffset(reference, null, null), PARAMETER, reference);
+	}
+
+	@Test
+	void discoversOffsetFromRequestWithPrefix() {
+
+		var reference = ScrollPosition.offset(5);
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", null), PARAMETER, reference);
 	}
 
 	@Test // GH-2856
 	void returnsNullIfNotSpecified() {
 
 		var request = new MockHttpServletRequest();
-		var position = resolveOffset(request, PARAMETER);
+		var position = resolveOffset(sut, request, PARAMETER);
 
 		assertThat(position).isNull();
 	}
@@ -78,7 +88,19 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 
 		var request = new MockHttpServletRequest();
 		request.addParameter("offset", "5");
-		var position = resolveOffset(request, OPTIONAL_PARAMETER);
+		var position = resolveOffset(sut, request, OPTIONAL_PARAMETER);
+
+		assertThat(position).isEqualTo(Optional.of(ScrollPosition.offset(5)));
+	}
+
+	@Test
+	void returnsOptionalParameterFromRequestWithPrefix() {
+
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_offset", "5");
+		var position = resolveOffset(resolver, request, OPTIONAL_PARAMETER);
 
 		assertThat(position).isEqualTo(Optional.of(ScrollPosition.offset(5)));
 	}
@@ -87,7 +109,37 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 	void returnsEmptyOptionalIfNotSpecified() {
 
 		var request = new MockHttpServletRequest();
-		var position = resolveOffset(request, OPTIONAL_PARAMETER);
+		var position = resolveOffset(sut, request, OPTIONAL_PARAMETER);
+
+		assertThat(position).isEqualTo(Optional.empty());
+	}
+
+	@Test
+	void returnsEmptyOptionalForEmptyOffsetParameter() {
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("offset", "");
+		var position = resolveOffset(sut, request, OPTIONAL_PARAMETER);
+
+		assertThat(position).isEqualTo(Optional.empty());
+	}
+
+	@Test
+	void returnsEmptyOptionalForInvalidOffsetParameter() {
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("offset", "invalid_number");
+		var position = resolveOffset(sut, request, OPTIONAL_PARAMETER);
+
+		assertThat(position).isEqualTo(Optional.empty());
+	}
+
+	@Test
+	void returnsEmptyOptionalForNullOffsetParameter() {
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("offset", (String) null);
+		var position = resolveOffset(sut, request, OPTIONAL_PARAMETER);
 
 		assertThat(position).isEqualTo(Optional.empty());
 	}
@@ -99,7 +151,7 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		request.addParameter("offset", "5");
 		request.addParameter("offset", "6");
 
-		assertThat(resolveOffset(request, PARAMETER)).isEqualTo(ScrollPosition.offset(5));
+		assertThat(resolveOffset(sut, request, PARAMETER)).isEqualTo(ScrollPosition.offset(5));
 	}
 
 	@Test // GH-2856
@@ -108,7 +160,44 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		var parameter = getParameterOfMethod("qualifiedOffset");
 		var reference = ScrollPosition.offset(5);
 
-		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "hello"), parameter, reference);
+		assertSupportedAndResolvedTo(sut, getRequestWithOffset(reference, null, "hello"), parameter, reference);
+	}
+
+	@Test
+	void discoversQualifiedOffsetFromRequestWithPrefix() {
+
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", "hello"), parameter, reference);
+	}
+
+	@Test
+	void discoversQualifiedOffsetFromRequestWithPrefixAndCustomParameterName() {
+
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		resolver.setOffsetParameter("cursor");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", "hello", "cursor", "_"), parameter,
+				reference);
+	}
+
+	@Test
+	void discoversQualifiedOffsetFromRequestWithPrefixAndCustomQualifierDelimiter() {
+
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		resolver.setQualifierDelimiter(".");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", "hello", "offset", "."), parameter,
+				reference);
 	}
 
 	@Test // GH-2856
@@ -117,7 +206,7 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		var request = new MockHttpServletRequest();
 		request.addParameter("offset", (String) null);
 
-		assertThat(resolveOffset(request, PARAMETER)).isNull();
+		assertThat(resolveOffset(sut, request, PARAMETER)).isNull();
 	}
 
 	@Test // GH-2856
@@ -126,7 +215,7 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		var request = new MockHttpServletRequest();
 		request.addParameter("offset", "");
 
-		assertThat(resolveOffset(request, PARAMETER)).isNull();
+		assertThat(resolveOffset(sut, request, PARAMETER)).isNull();
 	}
 
 	@Test // GH-2856
@@ -135,7 +224,7 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		var request = new MockHttpServletRequest();
 		request.addParameter("offset", "invalid_number");
 
-		assertThat(resolveOffset(request, PARAMETER)).isNull();
+		assertThat(resolveOffset(sut, request, PARAMETER)).isNull();
 	}
 
 	@Test // GH-2856
@@ -144,7 +233,18 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		var parameter = getParameterOfMethod("emptyQualifier");
 		var reference = ScrollPosition.offset(5);
 
-		assertSupportedAndResolvedTo(getRequestWithOffset(reference, ""), parameter, reference);
+		assertSupportedAndResolvedTo(sut, getRequestWithOffset(reference, null, ""), parameter, reference);
+	}
+
+	@Test
+	void emptyQualifierWithPrefixIsUsedInParameterLookup() {
+
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		var parameter = getParameterOfMethod("emptyQualifier");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", ""), parameter, reference);
 	}
 
 	@Test // GH-2856
@@ -153,19 +253,31 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		var parameter = getParameterOfMethod("mergedQualifier");
 		var reference = ScrollPosition.offset(5);
 
-		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "merged"), parameter, reference);
+		assertSupportedAndResolvedTo(sut, getRequestWithOffset(reference, null, "merged"), parameter, reference);
+	}
+
+	@Test
+	void mergedQualifierWithPrefixIsUsedInParameterLookup() {
+
+		var resolver = new OffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		var parameter = getParameterOfMethod("mergedQualifier");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", "merged"), parameter, reference);
 	}
 
 	@Nullable
-	private Object resolveOffset(HttpServletRequest request, MethodParameter parameter) {
-		return sut.resolveArgument(parameter, null, new ServletWebRequest(request), null);
+	private Object resolveOffset(OffsetScrollPositionHandlerMethodArgumentResolver resolver, HttpServletRequest request,
+			MethodParameter parameter) {
+		return resolver.resolveArgument(parameter, null, new ServletWebRequest(request), null);
 	}
 
-	private void assertSupportedAndResolvedTo(NativeWebRequest request, MethodParameter parameter,
-			OffsetScrollPosition position) {
+	private void assertSupportedAndResolvedTo(OffsetScrollPositionHandlerMethodArgumentResolver resolver,
+			NativeWebRequest request, MethodParameter parameter, OffsetScrollPosition position) {
 
-		assertThat(sut.supportsParameter(parameter)).isTrue();
-		assertThat(sut.resolveArgument(parameter, null, request, null)).isEqualTo(position);
+		assertThat(resolver.supportsParameter(parameter)).isTrue();
+		assertThat(resolver.resolveArgument(parameter, null, request, null)).isEqualTo(position);
 	}
 
 	private static MethodParameter getParameterOfMethod(String name) {
@@ -176,8 +288,13 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		return TestUtils.getParameterOfMethod(Controller.class, name, Optional.class);
 	}
 
-	private static NativeWebRequest getRequestWithOffset(@Nullable OffsetScrollPosition position,
+	private static NativeWebRequest getRequestWithOffset(@Nullable OffsetScrollPosition position, @Nullable String prefix,
 			@Nullable String qualifier) {
+		return getRequestWithOffset(position, prefix, qualifier, "offset", "_");
+	}
+
+	private static NativeWebRequest getRequestWithOffset(@Nullable OffsetScrollPosition position, @Nullable String prefix,
+			@Nullable String qualifier, String offsetParameter, String qualifierDelimiter) {
 
 		var request = new MockHttpServletRequest();
 
@@ -185,8 +302,14 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 			return new ServletWebRequest(request);
 		}
 
-		String parameterName = StringUtils.hasLength(qualifier) ? qualifier + "_offset" : "offset";
-		request.addParameter(parameterName, String.valueOf(position.getOffset()));
+		StringBuilder parameterName = new StringBuilder(prefix == null ? "" : prefix);
+
+		if (StringUtils.hasLength(qualifier)) {
+			parameterName.append(qualifier).append(qualifierDelimiter);
+		}
+
+		parameterName.append(offsetParameter);
+		request.addParameter(parameterName.toString(), String.valueOf(position.getOffset()));
 
 		return new ServletWebRequest(request);
 	}

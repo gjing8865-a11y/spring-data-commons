@@ -45,7 +45,8 @@ public class ReactiveOffsetScrollPositionHandlerMethodArgumentResolver
 	public @Nullable Object resolveArgumentValue(MethodParameter parameter, BindingContext bindingContext,
 			ServerWebExchange exchange) {
 
-		List<String> offsetParameter = exchange.getRequest().getQueryParams().get(getOffsetParameter(parameter));
+		MethodParameter nestedParameter = parameter.nestedIfOptional();
+		List<String> offsetParameter = exchange.getRequest().getQueryParams().get(getOffsetParameter(nestedParameter));
 
 		return adaptArgumentIfNecessary(parseParameterIntoOffsetScrollPosition(offsetParameter), parameter);
 	}

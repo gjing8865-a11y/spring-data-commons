@@ -57,7 +57,7 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 
 		var parameter = TestUtils.getParameterOfMethod(Controller.class, "unsupportedMethod", String.class);
 		var request = MockServerHttpRequest.get("/foo").build();
-		var position = resolveOffset(request, parameter);
+		var position = resolveOffset(sut, request, parameter);
 
 		assertThat(position).isNull();
 	}
@@ -67,14 +67,24 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 
 		var reference = ScrollPosition.offset(5);
 
-		assertSupportedAndResolvedTo(getRequestWithOffset(reference, null), PARAMETER, reference);
+		assertSupportedAndResolvedTo(sut, getRequestWithOffset(reference, null, null), PARAMETER, reference);
+	}
+
+	@Test
+	void discoversOffsetFromRequestWithPrefix() {
+
+		var reference = ScrollPosition.offset(5);
+		var resolver = new ReactiveOffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", null), PARAMETER, reference);
 	}
 
 	@Test // GH-2856
 	void returnsNullIfNotSpecified() {
 
 		var request = MockServerHttpRequest.get("/foo").build();
-		var position = resolveOffset(request, PARAMETER);
+		var position = resolveOffset(sut, request, PARAMETER);
 
 		assertThat(position).isNull();
 	}
@@ -83,7 +93,18 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 	void returnsOptionalParameterFromRequest() {
 
 		var request = MockServerHttpRequest.get("/foo?offset=5").build();
-		var position = resolveOffset(request, OPTIONAL_PARAMETER);
+		var position = resolveOffset(sut, request, OPTIONAL_PARAMETER);
+
+		assertThat(position).isEqualTo(Optional.of(ScrollPosition.offset(5)));
+	}
+
+	@Test
+	void returnsOptionalParameterFromRequestWithPrefix() {
+
+		var resolver = new ReactiveOffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		var request = MockServerHttpRequest.get("/foo?p_offset=5").build();
+		var position = resolveOffset(resolver, request, OPTIONAL_PARAMETER);
 
 		assertThat(position).isEqualTo(Optional.of(ScrollPosition.offset(5)));
 	}
@@ -92,7 +113,25 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 	void returnsEmptyOptionalIfNotSpecified() {
 
 		var request = MockServerHttpRequest.get("/foo").build();
-		var position = resolveOffset(request, OPTIONAL_PARAMETER);
+		var position = resolveOffset(sut, request, OPTIONAL_PARAMETER);
+
+		assertThat(position).isEqualTo(Optional.empty());
+	}
+
+	@Test
+	void returnsEmptyOptionalForEmptyOffsetParameter() {
+
+		var request = MockServerHttpRequest.get("/foo?offset=").build();
+		var position = resolveOffset(sut, request, OPTIONAL_PARAMETER);
+
+		assertThat(position).isEqualTo(Optional.empty());
+	}
+
+	@Test
+	void returnsEmptyOptionalForInvalidOffsetParameter() {
+
+		var request = MockServerHttpRequest.get("/foo?offset=invalid_number").build();
+		var position = resolveOffset(sut, request, OPTIONAL_PARAMETER);
 
 		assertThat(position).isEqualTo(Optional.empty());
 	}
@@ -102,7 +141,17 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 
 		var request = MockServerHttpRequest.get("/foo?offset=5&offset=6").build();
 
-		assertThat(resolveOffset(request, PARAMETER)).isEqualTo(ScrollPosition.offset(5));
+		assertThat(resolveOffset(sut, request, PARAMETER)).isEqualTo(ScrollPosition.offset(5));
+	}
+
+	@Test
+	void discoversOffsetFromRequestWithPrefixedMultipleParams() {
+
+		var resolver = new ReactiveOffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		var request = MockServerHttpRequest.get("/foo?p_offset=5&p_offset=6").build();
+
+		assertThat(resolveOffset(resolver, request, PARAMETER)).isEqualTo(ScrollPosition.offset(5));
 	}
 
 	@Test // GH-2856
@@ -111,7 +160,44 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		var parameter = getParameterOfMethod("qualifiedOffset");
 		var reference = ScrollPosition.offset(5);
 
-		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "hello"), parameter, reference);
+		assertSupportedAndResolvedTo(sut, getRequestWithOffset(reference, null, "hello"), parameter, reference);
+	}
+
+	@Test
+	void discoversQualifiedOffsetFromRequestWithPrefix() {
+
+		var resolver = new ReactiveOffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", "hello"), parameter, reference);
+	}
+
+	@Test
+	void discoversQualifiedOffsetFromRequestWithPrefixAndCustomParameterName() {
+
+		var resolver = new ReactiveOffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		resolver.setOffsetParameter("cursor");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", "hello", "cursor", "_"), parameter,
+				reference);
+	}
+
+	@Test
+	void discoversQualifiedOffsetFromRequestWithPrefixAndCustomQualifierDelimiter() {
+
+		var resolver = new ReactiveOffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		resolver.setQualifierDelimiter(".");
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", "hello", "offset", "."), parameter,
+				reference);
 	}
 
 	@Test // GH-2856
@@ -119,7 +205,7 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 
 		var request = MockServerHttpRequest.get("/foo?offset=").build();
 
-		assertThat(resolveOffset(request, PARAMETER)).isNull();
+		assertThat(resolveOffset(sut, request, PARAMETER)).isNull();
 	}
 
 	@Test // GH-2856
@@ -127,7 +213,7 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 
 		var request = MockServerHttpRequest.get("/foo?offset=invalid_number").build();
 
-		assertThat(resolveOffset(request, PARAMETER)).isNull();
+		assertThat(resolveOffset(sut, request, PARAMETER)).isNull();
 	}
 
 	@Test // GH-2856
@@ -136,7 +222,18 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		var parameter = getParameterOfMethod("emptyQualifier");
 		var reference = ScrollPosition.offset(5);
 
-		assertSupportedAndResolvedTo(getRequestWithOffset(reference, ""), parameter, reference);
+		assertSupportedAndResolvedTo(sut, getRequestWithOffset(reference, null, ""), parameter, reference);
+	}
+
+	@Test
+	void emptyQualifierWithPrefixIsUsedInParameterLookup() {
+
+		var resolver = new ReactiveOffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		var parameter = getParameterOfMethod("emptyQualifier");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", ""), parameter, reference);
 	}
 
 	@Test // GH-2856
@@ -145,22 +242,32 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		var parameter = getParameterOfMethod("mergedQualifier");
 		var reference = ScrollPosition.offset(5);
 
-		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "merged"), parameter, reference);
+		assertSupportedAndResolvedTo(sut, getRequestWithOffset(reference, null, "merged"), parameter, reference);
+	}
+
+	@Test
+	void mergedQualifierWithPrefixIsUsedInParameterLookup() {
+
+		var resolver = new ReactiveOffsetScrollPositionHandlerMethodArgumentResolver();
+		resolver.setPrefix("p_");
+		var parameter = getParameterOfMethod("mergedQualifier");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(resolver, getRequestWithOffset(reference, "p_", "merged"), parameter, reference);
 	}
 
 	@Nullable
-	private static Object resolveOffset(MockServerHttpRequest request, MethodParameter parameter) {
-
-		var resolver = new ReactiveOffsetScrollPositionHandlerMethodArgumentResolver();
+	private static Object resolveOffset(ReactiveOffsetScrollPositionHandlerMethodArgumentResolver resolver,
+			MockServerHttpRequest request, MethodParameter parameter) {
 		return resolver.resolveArgumentValue(parameter, null, MockServerWebExchange.from(request));
 	}
 
-	private void assertSupportedAndResolvedTo(MockServerHttpRequest request, MethodParameter parameter,
-			OffsetScrollPosition position) {
+	private void assertSupportedAndResolvedTo(ReactiveOffsetScrollPositionHandlerMethodArgumentResolver resolver,
+			MockServerHttpRequest request, MethodParameter parameter, OffsetScrollPosition position) {
 
-		assertThat(sut.supportsParameter(parameter)).isTrue();
+		assertThat(resolver.supportsParameter(parameter)).isTrue();
 
-		var resolved = resolveOffset(request, parameter);
+		var resolved = resolveOffset(resolver, request, parameter);
 		assertThat(resolved).isEqualTo(position);
 	}
 
@@ -173,15 +280,26 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 	}
 
 	private static MockServerHttpRequest getRequestWithOffset(@Nullable OffsetScrollPosition position,
-			@Nullable String qualifier) {
+			@Nullable String prefix, @Nullable String qualifier) {
+		return getRequestWithOffset(position, prefix, qualifier, "offset", "_");
+	}
+
+	private static MockServerHttpRequest getRequestWithOffset(@Nullable OffsetScrollPosition position,
+			@Nullable String prefix, @Nullable String qualifier, String offsetParameter, String qualifierDelimiter) {
 
 		if (position == null) {
 			return TestUtils.getWebfluxRequest();
 		}
 
-		String parameterName = StringUtils.hasLength(qualifier) ? qualifier + "_offset" : "offset";
-		return MockServerHttpRequest.get(String.format("foo?%s=%s", parameterName, String.valueOf(position.getOffset())))
-				.build();
+		StringBuilder parameterName = new StringBuilder(prefix == null ? "" : prefix);
+
+		if (StringUtils.hasLength(qualifier)) {
+			parameterName.append(qualifier).append(qualifierDelimiter);
+		}
+
+		parameterName.append(offsetParameter);
+		return MockServerHttpRequest
+				.get(String.format("foo?%s=%s", parameterName, String.valueOf(position.getOffset()))).build();
 	}
 
 	interface Controller {
