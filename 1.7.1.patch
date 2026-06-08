@@ -1,0 +1,432 @@
+diff --git a/src/main/java/org/springframework/data/convert/CustomConversions.java b/src/main/java/org/springframework/data/convert/CustomConversions.java
+index 713aa2e0..52e49b70 100644
+--- a/src/main/java/org/springframework/data/convert/CustomConversions.java
++++ b/src/main/java/org/springframework/data/convert/CustomConversions.java
+@@ -120,11 +120,7 @@ public class CustomConversions {
+ 
+ 		this.converterConfiguration = converterConfiguration;
+ 
+-		List<Object> registeredConverters = collectPotentialConverterRegistrations(
+-				converterConfiguration.getStoreConversions(), converterConfiguration.getUserConverters()).stream()
+-				.filter(this::isSupportedConverter).filter(this::shouldRegister)
+-				.map(ConverterRegistrationIntent::getConverterRegistration).map(this::register).distinct()
+-				.collect(Collectors.toCollection(ArrayList::new));
++		List<Object> registeredConverters = collectRegisteredConverters(converterConfiguration);
+ 
+ 		Collections.reverse(registeredConverters);
+ 
+@@ -147,6 +143,14 @@ public class CustomConversions {
+ 		this(new ConverterConfiguration(storeConversions, new ArrayList<>(converters)));
+ 	}
+ 
++	private List<Object> collectRegisteredConverters(ConverterConfiguration converterConfiguration) {
++
++		return collectPotentialConverterRegistrations(converterConfiguration.getStoreConversions(),
++				converterConfiguration.getUserConverters()).stream().filter(this::isSupportedConverter)
++				.filter(this::shouldRegister).map(ConverterRegistrationIntent::getConverterRegistration).map(this::register)
++				.distinct().collect(Collectors.toCollection(ArrayList::new));
++	}
++
+ 	private static boolean hasAssignableSourceType(ConvertiblePair pair, Class<?> sourceType) {
+ 		return pair.getSourceType().isAssignableFrom(sourceType);
+ 	}
+@@ -294,17 +298,22 @@ public class CustomConversions {
+ 
+ 		List<ConverterRegistrationIntent> converterRegistrations = new ArrayList<>();
+ 
+-		converters.stream().map(storeConversions::getRegistrationsFor).flatMap(Streamable::stream)
+-				.map(ConverterRegistrationIntent::userConverters).forEach(converterRegistrations::add);
++		collectConverterRegistrations(converterRegistrations, converters, storeConversions,
++				ConverterRegistrationIntent::userConverters);
++		collectConverterRegistrations(converterRegistrations, storeConversions.getStoreConverters(), storeConversions,
++				ConverterRegistrationIntent::storeConverters);
++		collectConverterRegistrations(converterRegistrations, DEFAULT_CONVERTERS, storeConversions,
++				ConverterRegistrationIntent::defaultConverters);
+ 
+-		storeConversions.getStoreConverters().stream().map(storeConversions::getRegistrationsFor)
+-				.flatMap(Streamable::stream).map(ConverterRegistrationIntent::storeConverters)
+-				.forEach(converterRegistrations::add);
++		return converterRegistrations;
++	}
+ 
+-		DEFAULT_CONVERTERS.stream().map(storeConversions::getRegistrationsFor).flatMap(Streamable::stream)
+-				.map(ConverterRegistrationIntent::defaultConverters).forEach(converterRegistrations::add);
++	private void collectConverterRegistrations(List<ConverterRegistrationIntent> registrations, Collection<?> converters,
++			StoreConversions storeConversions,
++			Function<ConverterRegistration, ConverterRegistrationIntent> originAdapter) {
+ 
+-		return converterRegistrations;
++		converters.stream().map(storeConversions::getRegistrationsFor).flatMap(Streamable::stream).map(originAdapter)
++				.forEach(registrations::add);
+ 	}
+ 
+ 	/**
+@@ -318,30 +327,41 @@ public class CustomConversions {
+ 
+ 		Assert.notNull(converterRegistration, "Converter registration must not be null");
+ 
+-		ConvertiblePair pair = converterRegistration.getConvertiblePair();
++		registerReadingPair(converterRegistration);
++		registerWritingPair(converterRegistration);
+ 
+-		if (converterRegistration.isReading()) {
++		return converterRegistration.getConverter();
++	}
+ 
+-			readingPairs.add(pair);
++	private void registerReadingPair(ConverterRegistration converterRegistration) {
+ 
+-			if (logger.isWarnEnabled() && !converterRegistration.isSimpleSourceType()
+-					&& !Collection.class.isAssignableFrom(pair.getSourceType())) {
+-				logger.warn(String.format(READ_CONVERTER_NOT_SIMPLE, pair.getSourceType(), pair.getTargetType()));
+-			}
++		if (!converterRegistration.isReading()) {
++			return;
+ 		}
+ 
+-		if (converterRegistration.isWriting()) {
++		ConvertiblePair pair = converterRegistration.getConvertiblePair();
++		readingPairs.add(pair);
++
++		if (logger.isWarnEnabled() && !converterRegistration.isSimpleSourceType()
++				&& !Collection.class.isAssignableFrom(pair.getSourceType())) {
++			logger.warn(String.format(READ_CONVERTER_NOT_SIMPLE, pair.getSourceType(), pair.getTargetType()));
++		}
++	}
+ 
+-			writingPairs.add(pair);
+-			customSimpleTypes.add(pair.getSourceType());
++	private void registerWritingPair(ConverterRegistration converterRegistration) {
+ 
+-			if (logger.isWarnEnabled() && !converterRegistration.isSimpleTargetType()
+-					&& !Collection.class.isAssignableFrom(pair.getTargetType())) {
+-				logger.warn(String.format(WRITE_CONVERTER_NOT_SIMPLE, pair.getSourceType(), pair.getTargetType()));
+-			}
++		if (!converterRegistration.isWriting()) {
++			return;
+ 		}
+ 
+-		return converterRegistration.getConverter();
++		ConvertiblePair pair = converterRegistration.getConvertiblePair();
++		writingPairs.add(pair);
++		customSimpleTypes.add(pair.getSourceType());
++
++		if (logger.isWarnEnabled() && !converterRegistration.isSimpleTargetType()
++				&& !Collection.class.isAssignableFrom(pair.getTargetType())) {
++			logger.warn(String.format(WRITE_CONVERTER_NOT_SIMPLE, pair.getSourceType(), pair.getTargetType()));
++		}
+ 	}
+ 
+ 	/**
+@@ -356,23 +376,34 @@ public class CustomConversions {
+ 	private boolean isSupportedConverter(ConverterRegistrationIntent registrationIntent) {
+ 
+ 		boolean register = registrationIntent.isUserConverter() || registrationIntent.isStoreConverter()
+-				|| (registrationIntent.isReading() && registrationIntent.isSimpleSourceType())
++				|| isStoreSimpleTypeConversion(registrationIntent);
++
++		logRegistrationDecision(registrationIntent, register);
++
++		return register;
++	}
++
++	private boolean isStoreSimpleTypeConversion(ConverterRegistrationIntent registrationIntent) {
++		return (registrationIntent.isReading() && registrationIntent.isSimpleSourceType())
+ 				|| (registrationIntent.isWriting() && registrationIntent.isSimpleTargetType());
++	}
+ 
+-		if (logger.isDebugEnabled()) {
++	private void logRegistrationDecision(ConverterRegistrationIntent registrationIntent, boolean register) {
+ 
+-			if (register) {
+-				logger.debug(String.format(ADD_CONVERTER, registrationIntent.isUserConverter() ? "user defined " : "",
+-						registrationIntent.getSourceType(), registrationIntent.getTargetType(),
+-						registrationIntent.isReading() ? "reading" : "writing"));
+-			} else {
+-				logger.debug(String.format(SKIP_CONVERTER, registrationIntent.getSourceType(),
+-						registrationIntent.getTargetType(), registrationIntent.isReading() ? "reading" : "writing",
+-						registrationIntent.isReading() ? registrationIntent.getSourceType() : registrationIntent.getTargetType()));
+-			}
++		if (!logger.isDebugEnabled()) {
++			return;
+ 		}
+ 
+-		return register;
++		if (register) {
++			logger.debug(String.format(ADD_CONVERTER, registrationIntent.isUserConverter() ? "user defined " : "",
++					registrationIntent.getSourceType(), registrationIntent.getTargetType(),
++					registrationIntent.isReading() ? "reading" : "writing"));
++			return;
++		}
++
++		logger.debug(String.format(SKIP_CONVERTER, registrationIntent.getSourceType(), registrationIntent.getTargetType(),
++				registrationIntent.isReading() ? "reading" : "writing",
++				registrationIntent.isReading() ? registrationIntent.getSourceType() : registrationIntent.getTargetType()));
+ 	}
+ 
+ 	/**
+@@ -381,8 +412,11 @@ public class CustomConversions {
+ 	 * @since 2.3
+ 	 */
+ 	private boolean shouldRegister(ConverterRegistrationIntent intent) {
+-		return !intent.isDefaultConverter()
+-				|| converterConfiguration.shouldRegister(intent.getConverterRegistration().getConvertiblePair());
++		return !intent.isDefaultConverter() || shouldRegisterDefaultConverter(intent);
++	}
++
++	private boolean shouldRegisterDefaultConverter(ConverterRegistrationIntent intent) {
++		return converterConfiguration.shouldRegister(intent.getConvertiblePair());
+ 	}
+ 
+ 	/**
+@@ -491,28 +525,45 @@ public class CustomConversions {
+ 	private @Nullable Class<?> getCustomTarget(Class<?> sourceType, @Nullable Class<?> targetType,
+ 			Collection<ConvertiblePair> pairs) {
+ 
+-		if (targetType != null && pairs.contains(new ConvertiblePair(sourceType, targetType))) {
+-			return targetType;
++		Class<?> exactMatch = getExactTargetMatch(sourceType, targetType, pairs);
++		if (exactMatch != null) {
++			return exactMatch;
+ 		}
+ 
+-		for (ConvertiblePair pair : pairs) {
++		return findAssignableTarget(sourceType, targetType, pairs);
++	}
+ 
+-			if (!hasAssignableSourceType(pair, sourceType)) {
+-				continue;
+-			}
++	private @Nullable Class<?> getExactTargetMatch(Class<?> sourceType, @Nullable Class<?> targetType,
++			Collection<ConvertiblePair> pairs) {
+ 
+-			Class<?> candidate = pair.getTargetType();
++		if (targetType == null || !pairs.contains(new ConvertiblePair(sourceType, targetType))) {
++			return null;
++		}
+ 
+-			if (!requestedTargetTypeIsAssignable(targetType, candidate)) {
+-				continue;
+-			}
++		return targetType;
++	}
+ 
+-			return candidate;
++	private @Nullable Class<?> findAssignableTarget(Class<?> sourceType, @Nullable Class<?> targetType,
++			Collection<ConvertiblePair> pairs) {
++
++		for (ConvertiblePair pair : pairs) {
++			if (isTargetCandidate(sourceType, targetType, pair)) {
++				return pair.getTargetType();
++			}
+ 		}
+ 
+ 		return null;
+ 	}
+ 
++	private boolean isTargetCandidate(Class<?> sourceType, @Nullable Class<?> targetType, ConvertiblePair pair) {
++
++		if (!hasAssignableSourceType(pair, sourceType)) {
++			return false;
++		}
++
++		return requestedTargetTypeIsAssignable(targetType, pair.getTargetType());
++	}
++
+ 	/**
+ 	 * Value object to cache custom conversion targets.
+ 	 *
+@@ -520,6 +571,7 @@ public class CustomConversions {
+ 	 */
+ 	static class ConversionTargetsCache {
+ 
++		private static final Class<?> RAW_TARGET_LOOKUP = AbsentTargetTypeMarker.class;
+ 		private volatile Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>();
+ 
+ 		/**
+@@ -533,7 +585,7 @@ public class CustomConversions {
+ 		 */
+ 		public @Nullable Class<?> computeIfAbsent(Class<?> sourceType,
+ 				Function<ConvertiblePair, Class<?>> mappingFunction) {
+-			return computeIfAbsent(sourceType, AbsentTargetTypeMarker.class, mappingFunction);
++			return computeIfAbsent(sourceType, RAW_TARGET_LOOKUP, mappingFunction);
+ 		}
+ 
+ 		/**
+@@ -548,27 +600,30 @@ public class CustomConversions {
+ 		 */
+ 		public @Nullable Class<?> computeIfAbsent(Class<?> sourceType, Class<?> targetType,
+ 				Function<ConvertiblePair, Class<?>> mappingFunction) {
++			return getOrCreateTargetTypes(sourceType).computeIfAbsent(targetType, mappingFunction);
++		}
+ 
+-			TargetTypes targetTypes = customReadTargetTypes.get(sourceType);
++		private TargetTypes getOrCreateTargetTypes(Class<?> sourceType) {
+ 
+-			if (targetTypes == null) {
++			TargetTypes targetTypes = customReadTargetTypes.get(sourceType);
+ 
+-				synchronized (this) {
++			if (targetTypes != null) {
++				return targetTypes;
++			}
+ 
+-					TargetTypes customReadTarget = customReadTargetTypes.get(sourceType);
+-					if (customReadTarget != null) {
+-						targetTypes = customReadTarget;
+-					} else {
++			synchronized (this) {
+ 
+-						Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>(this.customReadTargetTypes);
+-						targetTypes = new TargetTypes(sourceType);
+-						customReadTargetTypes.put(sourceType, targetTypes);
+-						this.customReadTargetTypes = customReadTargetTypes;
+-					}
++				TargetTypes existing = customReadTargetTypes.get(sourceType);
++				if (existing != null) {
++					return existing;
+ 				}
+-			}
+ 
+-			return targetTypes.computeIfAbsent(targetType, mappingFunction);
++				Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>(this.customReadTargetTypes);
++				TargetTypes created = new TargetTypes(sourceType);
++				customReadTargetTypes.put(sourceType, created);
++				this.customReadTargetTypes = customReadTargetTypes;
++				return created;
++			}
+ 		}
+ 
+ 		/**
+@@ -584,6 +639,7 @@ public class CustomConversions {
+ 	 */
+ 	static class TargetTypes {
+ 
++		private static final Class<?> ABSENT_TARGET_TYPE = Void.class;
+ 		private final Class<?> sourceType;
+ 		private volatile Map<Class<?>, Class<?>> conversionTargets = new HashMap<>();
+ 
+@@ -603,26 +659,33 @@ public class CustomConversions {
+ 		public @Nullable Class<?> computeIfAbsent(Class<?> targetType,
+ 				Function<ConvertiblePair, Class<?>> mappingFunction) {
+ 
+-			Class<?> optionalTarget = conversionTargets.get(targetType);
+-
+-			if (optionalTarget == null) {
++			Class<?> cachedTargetType = conversionTargets.get(targetType);
+ 
+-				synchronized (this) {
++			if (cachedTargetType != null) {
++				return decodeTargetType(cachedTargetType);
++			}
+ 
+-					Class<?> conversionTarget = conversionTargets.get(targetType);
+-					if (conversionTarget != null) {
+-						optionalTarget = conversionTarget;
+-					} else {
++			synchronized (this) {
+ 
+-						optionalTarget = mappingFunction.apply(new ConvertiblePair(sourceType, targetType));
+-						Map<Class<?>, Class<?>> conversionTargets = new HashMap<>(this.conversionTargets);
+-						conversionTargets.put(targetType, optionalTarget == null ? Void.class : optionalTarget);
+-						this.conversionTargets = conversionTargets;
+-					}
++				Class<?> existingTargetType = conversionTargets.get(targetType);
++				if (existingTargetType != null) {
++					return decodeTargetType(existingTargetType);
+ 				}
++
++				Class<?> computedTargetType = mappingFunction.apply(new ConvertiblePair(sourceType, targetType));
++				Map<Class<?>, Class<?>> conversionTargets = new HashMap<>(this.conversionTargets);
++				conversionTargets.put(targetType, encodeTargetType(computedTargetType));
++				this.conversionTargets = conversionTargets;
++				return computedTargetType;
+ 			}
++		}
+ 
+-			return Void.class.equals(optionalTarget) ? null : optionalTarget;
++		private static Class<?> encodeTargetType(@Nullable Class<?> targetType) {
++			return targetType == null ? ABSENT_TARGET_TYPE : targetType;
++		}
++
++		private static @Nullable Class<?> decodeTargetType(Class<?> cachedTargetType) {
++			return ABSENT_TARGET_TYPE.equals(cachedTargetType) ? null : cachedTargetType;
+ 		}
+ 	}
+ 
+@@ -663,6 +726,10 @@ public class CustomConversions {
+ 			return delegate.getConvertiblePair().getTargetType();
+ 		}
+ 
++		ConvertiblePair getConvertiblePair() {
++			return delegate.getConvertiblePair();
++		}
++
+ 		public boolean isWriting() {
+ 			return delegate.isWriting();
+ 		}
+diff --git a/src/test/java/org/springframework/data/convert/CustomConversionsUnitTests.java b/src/test/java/org/springframework/data/convert/CustomConversionsUnitTests.java
+index badbb142..9d3d1866 100644
+--- a/src/test/java/org/springframework/data/convert/CustomConversionsUnitTests.java
++++ b/src/test/java/org/springframework/data/convert/CustomConversionsUnitTests.java
+@@ -101,6 +101,39 @@ class CustomConversionsUnitTests {
+ 		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
+ 	}
+ 
++	@Test
++	void rawWriteTargetCacheDoesNotPolluteRequestedTargetLookup() {
++
++		var conversions = new CustomConversions(StoreConversions.NONE,
++				Arrays.asList(NumberToStringConverter.INSTANCE, StringToNumberConverter.INSTANCE));
++
++		assertThat(conversions.getCustomWriteTarget(Long.class)).hasValue(String.class);
++		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
++		assertThat(conversions.getCustomWriteTarget(Long.class)).hasValue(String.class);
++	}
++
++	@Test
++	void absentRequestedWriteTargetCacheDoesNotPolluteOtherRequestedTargets() {
++
++		var conversions = new CustomConversions(StoreConversions.NONE,
++				Arrays.asList(NumberToStringConverter.INSTANCE, StringToNumberConverter.INSTANCE));
++
++		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
++		assertThat(conversions.getCustomWriteTarget(Long.class, String.class)).hasValue(String.class);
++		assertThat(conversions.getCustomWriteTarget(Long.class, String.class)).hasValue(String.class);
++	}
++
++	@Test
++	void absentRequestedReadTargetCacheDoesNotPolluteOtherRequestedTargets() {
++
++		var conversions = new CustomConversions(StoreConversions.NONE,
++				Arrays.asList(NumberToStringConverter.INSTANCE, StringToNumberConverter.INSTANCE));
++
++		assertThat(conversions.hasCustomReadTarget(String.class, Object.class)).isFalse();
++		assertThat(conversions.hasCustomReadTarget(String.class, Long.class)).isTrue();
++		assertThat(conversions.hasCustomReadTarget(String.class, Long.class)).isTrue();
++	}
++
+ 	@Test // DATACMNS-1035
+ 	void populatesConversionServiceCorrectly() {
+ 
+@@ -233,6 +266,20 @@ class CustomConversionsUnitTests {
+ 		verify(registry, never()).addConverter(any(LocalDateTimeToDateConverter.class));
+ 	}
+ 
++	@Test
++	void defaultConverterFilterDoesNotAffectUserConverters() {
++
++		var registry = mock(ConverterRegistry.class);
++
++		var config = new ConverterConfiguration(StoreConversions.NONE,
++				Collections.singletonList(Jsr310Converters.LocalDateTimeToInstantConverter.INSTANCE),
++				Predicate.<ConvertiblePair> isEqual(new ConvertiblePair(java.time.LocalDateTime.class, Date.class)).negate());
++		new CustomConversions(config).registerConvertersIn(registry);
++
++		verify(registry).addConverter(any(Jsr310Converters.LocalDateTimeToInstantConverter.class));
++		verify(registry, never()).addConverter(any(LocalDateTimeToDateConverter.class));
++	}
++
+ 	@Test // DATACMNS-1615
+ 	void doesNotSkipUserConverterConverterEvenWhenConfigurationWouldNotAllowIt() {
+ 

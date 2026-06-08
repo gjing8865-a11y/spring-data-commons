@@ -101,6 +101,39 @@ class CustomConversionsUnitTests {
 		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
 	}
 
+	@Test
+	void rawWriteTargetCacheDoesNotPolluteRequestedTargetLookup() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Arrays.asList(NumberToStringConverter.INSTANCE, StringToNumberConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(Long.class)).hasValue(String.class);
+		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
+		assertThat(conversions.getCustomWriteTarget(Long.class)).hasValue(String.class);
+	}
+
+	@Test
+	void absentRequestedWriteTargetCacheDoesNotPolluteOtherRequestedTargets() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Arrays.asList(NumberToStringConverter.INSTANCE, StringToNumberConverter.INSTANCE));
+
+		assertThat(conversions.getCustomWriteTarget(Long.class, Object.class)).isEmpty();
+		assertThat(conversions.getCustomWriteTarget(Long.class, String.class)).hasValue(String.class);
+		assertThat(conversions.getCustomWriteTarget(Long.class, String.class)).hasValue(String.class);
+	}
+
+	@Test
+	void absentRequestedReadTargetCacheDoesNotPolluteOtherRequestedTargets() {
+
+		var conversions = new CustomConversions(StoreConversions.NONE,
+				Arrays.asList(NumberToStringConverter.INSTANCE, StringToNumberConverter.INSTANCE));
+
+		assertThat(conversions.hasCustomReadTarget(String.class, Object.class)).isFalse();
+		assertThat(conversions.hasCustomReadTarget(String.class, Long.class)).isTrue();
+		assertThat(conversions.hasCustomReadTarget(String.class, Long.class)).isTrue();
+	}
+
 	@Test // DATACMNS-1035
 	void populatesConversionServiceCorrectly() {
 
@@ -230,6 +263,20 @@ class CustomConversionsUnitTests {
 				Predicate.<ConvertiblePair> isEqual(new ConvertiblePair(java.time.LocalDateTime.class, Date.class)).negate());
 		new CustomConversions(config).registerConvertersIn(registry);
 
+		verify(registry, never()).addConverter(any(LocalDateTimeToDateConverter.class));
+	}
+
+	@Test
+	void defaultConverterFilterDoesNotAffectUserConverters() {
+
+		var registry = mock(ConverterRegistry.class);
+
+		var config = new ConverterConfiguration(StoreConversions.NONE,
+				Collections.singletonList(Jsr310Converters.LocalDateTimeToInstantConverter.INSTANCE),
+				Predicate.<ConvertiblePair> isEqual(new ConvertiblePair(java.time.LocalDateTime.class, Date.class)).negate());
+		new CustomConversions(config).registerConvertersIn(registry);
+
+		verify(registry).addConverter(any(Jsr310Converters.LocalDateTimeToInstantConverter.class));
 		verify(registry, never()).addConverter(any(LocalDateTimeToDateConverter.class));
 	}
 

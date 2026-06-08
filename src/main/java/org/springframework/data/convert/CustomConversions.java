@@ -120,11 +120,7 @@ public class CustomConversions {
 
 		this.converterConfiguration = converterConfiguration;
 
-		List<Object> registeredConverters = collectPotentialConverterRegistrations(
-				converterConfiguration.getStoreConversions(), converterConfiguration.getUserConverters()).stream()
-				.filter(this::isSupportedConverter).filter(this::shouldRegister)
-				.map(ConverterRegistrationIntent::getConverterRegistration).map(this::register).distinct()
-				.collect(Collectors.toCollection(ArrayList::new));
+		List<Object> registeredConverters = collectRegisteredConverters(converterConfiguration);
 
 		Collections.reverse(registeredConverters);
 
@@ -145,6 +141,14 @@ public class CustomConversions {
 	 */
 	public CustomConversions(StoreConversions storeConversions, Collection<?> converters) {
 		this(new ConverterConfiguration(storeConversions, new ArrayList<>(converters)));
+	}
+
+	private List<Object> collectRegisteredConverters(ConverterConfiguration converterConfiguration) {
+
+		return collectPotentialConverterRegistrations(converterConfiguration.getStoreConversions(),
+				converterConfiguration.getUserConverters()).stream().filter(this::isSupportedConverter)
+				.filter(this::shouldRegister).map(ConverterRegistrationIntent::getConverterRegistration).map(this::register)
+				.distinct().collect(Collectors.toCollection(ArrayList::new));
 	}
 
 	private static boolean hasAssignableSourceType(ConvertiblePair pair, Class<?> sourceType) {
@@ -294,17 +298,22 @@ public class CustomConversions {
 
 		List<ConverterRegistrationIntent> converterRegistrations = new ArrayList<>();
 
-		converters.stream().map(storeConversions::getRegistrationsFor).flatMap(Streamable::stream)
-				.map(ConverterRegistrationIntent::userConverters).forEach(converterRegistrations::add);
-
-		storeConversions.getStoreConverters().stream().map(storeConversions::getRegistrationsFor)
-				.flatMap(Streamable::stream).map(ConverterRegistrationIntent::storeConverters)
-				.forEach(converterRegistrations::add);
-
-		DEFAULT_CONVERTERS.stream().map(storeConversions::getRegistrationsFor).flatMap(Streamable::stream)
-				.map(ConverterRegistrationIntent::defaultConverters).forEach(converterRegistrations::add);
+		collectConverterRegistrations(converterRegistrations, converters, storeConversions,
+				ConverterRegistrationIntent::userConverters);
+		collectConverterRegistrations(converterRegistrations, storeConversions.getStoreConverters(), storeConversions,
+				ConverterRegistrationIntent::storeConverters);
+		collectConverterRegistrations(converterRegistrations, DEFAULT_CONVERTERS, storeConversions,
+				ConverterRegistrationIntent::defaultConverters);
 
 		return converterRegistrations;
+	}
+
+	private void collectConverterRegistrations(List<ConverterRegistrationIntent> registrations, Collection<?> converters,
+			StoreConversions storeConversions,
+			Function<ConverterRegistration, ConverterRegistrationIntent> originAdapter) {
+
+		converters.stream().map(storeConversions::getRegistrationsFor).flatMap(Streamable::stream).map(originAdapter)
+				.forEach(registrations::add);
 	}
 
 	/**
@@ -318,30 +327,41 @@ public class CustomConversions {
 
 		Assert.notNull(converterRegistration, "Converter registration must not be null");
 
-		ConvertiblePair pair = converterRegistration.getConvertiblePair();
-
-		if (converterRegistration.isReading()) {
-
-			readingPairs.add(pair);
-
-			if (logger.isWarnEnabled() && !converterRegistration.isSimpleSourceType()
-					&& !Collection.class.isAssignableFrom(pair.getSourceType())) {
-				logger.warn(String.format(READ_CONVERTER_NOT_SIMPLE, pair.getSourceType(), pair.getTargetType()));
-			}
-		}
-
-		if (converterRegistration.isWriting()) {
-
-			writingPairs.add(pair);
-			customSimpleTypes.add(pair.getSourceType());
-
-			if (logger.isWarnEnabled() && !converterRegistration.isSimpleTargetType()
-					&& !Collection.class.isAssignableFrom(pair.getTargetType())) {
-				logger.warn(String.format(WRITE_CONVERTER_NOT_SIMPLE, pair.getSourceType(), pair.getTargetType()));
-			}
-		}
+		registerReadingPair(converterRegistration);
+		registerWritingPair(converterRegistration);
 
 		return converterRegistration.getConverter();
+	}
+
+	private void registerReadingPair(ConverterRegistration converterRegistration) {
+
+		if (!converterRegistration.isReading()) {
+			return;
+		}
+
+		ConvertiblePair pair = converterRegistration.getConvertiblePair();
+		readingPairs.add(pair);
+
+		if (logger.isWarnEnabled() && !converterRegistration.isSimpleSourceType()
+				&& !Collection.class.isAssignableFrom(pair.getSourceType())) {
+			logger.warn(String.format(READ_CONVERTER_NOT_SIMPLE, pair.getSourceType(), pair.getTargetType()));
+		}
+	}
+
+	private void registerWritingPair(ConverterRegistration converterRegistration) {
+
+		if (!converterRegistration.isWriting()) {
+			return;
+		}
+
+		ConvertiblePair pair = converterRegistration.getConvertiblePair();
+		writingPairs.add(pair);
+		customSimpleTypes.add(pair.getSourceType());
+
+		if (logger.isWarnEnabled() && !converterRegistration.isSimpleTargetType()
+				&& !Collection.class.isAssignableFrom(pair.getTargetType())) {
+			logger.warn(String.format(WRITE_CONVERTER_NOT_SIMPLE, pair.getSourceType(), pair.getTargetType()));
+		}
 	}
 
 	/**
@@ -356,23 +376,34 @@ public class CustomConversions {
 	private boolean isSupportedConverter(ConverterRegistrationIntent registrationIntent) {
 
 		boolean register = registrationIntent.isUserConverter() || registrationIntent.isStoreConverter()
-				|| (registrationIntent.isReading() && registrationIntent.isSimpleSourceType())
-				|| (registrationIntent.isWriting() && registrationIntent.isSimpleTargetType());
+				|| isStoreSimpleTypeConversion(registrationIntent);
 
-		if (logger.isDebugEnabled()) {
-
-			if (register) {
-				logger.debug(String.format(ADD_CONVERTER, registrationIntent.isUserConverter() ? "user defined " : "",
-						registrationIntent.getSourceType(), registrationIntent.getTargetType(),
-						registrationIntent.isReading() ? "reading" : "writing"));
-			} else {
-				logger.debug(String.format(SKIP_CONVERTER, registrationIntent.getSourceType(),
-						registrationIntent.getTargetType(), registrationIntent.isReading() ? "reading" : "writing",
-						registrationIntent.isReading() ? registrationIntent.getSourceType() : registrationIntent.getTargetType()));
-			}
-		}
+		logRegistrationDecision(registrationIntent, register);
 
 		return register;
+	}
+
+	private boolean isStoreSimpleTypeConversion(ConverterRegistrationIntent registrationIntent) {
+		return (registrationIntent.isReading() && registrationIntent.isSimpleSourceType())
+				|| (registrationIntent.isWriting() && registrationIntent.isSimpleTargetType());
+	}
+
+	private void logRegistrationDecision(ConverterRegistrationIntent registrationIntent, boolean register) {
+
+		if (!logger.isDebugEnabled()) {
+			return;
+		}
+
+		if (register) {
+			logger.debug(String.format(ADD_CONVERTER, registrationIntent.isUserConverter() ? "user defined " : "",
+					registrationIntent.getSourceType(), registrationIntent.getTargetType(),
+					registrationIntent.isReading() ? "reading" : "writing"));
+			return;
+		}
+
+		logger.debug(String.format(SKIP_CONVERTER, registrationIntent.getSourceType(), registrationIntent.getTargetType(),
+				registrationIntent.isReading() ? "reading" : "writing",
+				registrationIntent.isReading() ? registrationIntent.getSourceType() : registrationIntent.getTargetType()));
 	}
 
 	/**
@@ -381,8 +412,11 @@ public class CustomConversions {
 	 * @since 2.3
 	 */
 	private boolean shouldRegister(ConverterRegistrationIntent intent) {
-		return !intent.isDefaultConverter()
-				|| converterConfiguration.shouldRegister(intent.getConverterRegistration().getConvertiblePair());
+		return !intent.isDefaultConverter() || shouldRegisterDefaultConverter(intent);
+	}
+
+	private boolean shouldRegisterDefaultConverter(ConverterRegistrationIntent intent) {
+		return converterConfiguration.shouldRegister(intent.getConvertiblePair());
 	}
 
 	/**
@@ -491,26 +525,43 @@ public class CustomConversions {
 	private @Nullable Class<?> getCustomTarget(Class<?> sourceType, @Nullable Class<?> targetType,
 			Collection<ConvertiblePair> pairs) {
 
-		if (targetType != null && pairs.contains(new ConvertiblePair(sourceType, targetType))) {
-			return targetType;
+		Class<?> exactMatch = getExactTargetMatch(sourceType, targetType, pairs);
+		if (exactMatch != null) {
+			return exactMatch;
 		}
 
+		return findAssignableTarget(sourceType, targetType, pairs);
+	}
+
+	private @Nullable Class<?> getExactTargetMatch(Class<?> sourceType, @Nullable Class<?> targetType,
+			Collection<ConvertiblePair> pairs) {
+
+		if (targetType == null || !pairs.contains(new ConvertiblePair(sourceType, targetType))) {
+			return null;
+		}
+
+		return targetType;
+	}
+
+	private @Nullable Class<?> findAssignableTarget(Class<?> sourceType, @Nullable Class<?> targetType,
+			Collection<ConvertiblePair> pairs) {
+
 		for (ConvertiblePair pair : pairs) {
-
-			if (!hasAssignableSourceType(pair, sourceType)) {
-				continue;
+			if (isTargetCandidate(sourceType, targetType, pair)) {
+				return pair.getTargetType();
 			}
-
-			Class<?> candidate = pair.getTargetType();
-
-			if (!requestedTargetTypeIsAssignable(targetType, candidate)) {
-				continue;
-			}
-
-			return candidate;
 		}
 
 		return null;
+	}
+
+	private boolean isTargetCandidate(Class<?> sourceType, @Nullable Class<?> targetType, ConvertiblePair pair) {
+
+		if (!hasAssignableSourceType(pair, sourceType)) {
+			return false;
+		}
+
+		return requestedTargetTypeIsAssignable(targetType, pair.getTargetType());
 	}
 
 	/**
@@ -520,6 +571,7 @@ public class CustomConversions {
 	 */
 	static class ConversionTargetsCache {
 
+		private static final Class<?> RAW_TARGET_LOOKUP = AbsentTargetTypeMarker.class;
 		private volatile Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>();
 
 		/**
@@ -533,7 +585,7 @@ public class CustomConversions {
 		 */
 		public @Nullable Class<?> computeIfAbsent(Class<?> sourceType,
 				Function<ConvertiblePair, Class<?>> mappingFunction) {
-			return computeIfAbsent(sourceType, AbsentTargetTypeMarker.class, mappingFunction);
+			return computeIfAbsent(sourceType, RAW_TARGET_LOOKUP, mappingFunction);
 		}
 
 		/**
@@ -548,27 +600,30 @@ public class CustomConversions {
 		 */
 		public @Nullable Class<?> computeIfAbsent(Class<?> sourceType, Class<?> targetType,
 				Function<ConvertiblePair, Class<?>> mappingFunction) {
+			return getOrCreateTargetTypes(sourceType).computeIfAbsent(targetType, mappingFunction);
+		}
+
+		private TargetTypes getOrCreateTargetTypes(Class<?> sourceType) {
 
 			TargetTypes targetTypes = customReadTargetTypes.get(sourceType);
 
-			if (targetTypes == null) {
-
-				synchronized (this) {
-
-					TargetTypes customReadTarget = customReadTargetTypes.get(sourceType);
-					if (customReadTarget != null) {
-						targetTypes = customReadTarget;
-					} else {
-
-						Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>(this.customReadTargetTypes);
-						targetTypes = new TargetTypes(sourceType);
-						customReadTargetTypes.put(sourceType, targetTypes);
-						this.customReadTargetTypes = customReadTargetTypes;
-					}
-				}
+			if (targetTypes != null) {
+				return targetTypes;
 			}
 
-			return targetTypes.computeIfAbsent(targetType, mappingFunction);
+			synchronized (this) {
+
+				TargetTypes existing = customReadTargetTypes.get(sourceType);
+				if (existing != null) {
+					return existing;
+				}
+
+				Map<Class<?>, TargetTypes> customReadTargetTypes = new HashMap<>(this.customReadTargetTypes);
+				TargetTypes created = new TargetTypes(sourceType);
+				customReadTargetTypes.put(sourceType, created);
+				this.customReadTargetTypes = customReadTargetTypes;
+				return created;
+			}
 		}
 
 		/**
@@ -584,6 +639,7 @@ public class CustomConversions {
 	 */
 	static class TargetTypes {
 
+		private static final Class<?> ABSENT_TARGET_TYPE = Void.class;
 		private final Class<?> sourceType;
 		private volatile Map<Class<?>, Class<?>> conversionTargets = new HashMap<>();
 
@@ -603,26 +659,33 @@ public class CustomConversions {
 		public @Nullable Class<?> computeIfAbsent(Class<?> targetType,
 				Function<ConvertiblePair, Class<?>> mappingFunction) {
 
-			Class<?> optionalTarget = conversionTargets.get(targetType);
+			Class<?> cachedTargetType = conversionTargets.get(targetType);
 
-			if (optionalTarget == null) {
-
-				synchronized (this) {
-
-					Class<?> conversionTarget = conversionTargets.get(targetType);
-					if (conversionTarget != null) {
-						optionalTarget = conversionTarget;
-					} else {
-
-						optionalTarget = mappingFunction.apply(new ConvertiblePair(sourceType, targetType));
-						Map<Class<?>, Class<?>> conversionTargets = new HashMap<>(this.conversionTargets);
-						conversionTargets.put(targetType, optionalTarget == null ? Void.class : optionalTarget);
-						this.conversionTargets = conversionTargets;
-					}
-				}
+			if (cachedTargetType != null) {
+				return decodeTargetType(cachedTargetType);
 			}
 
-			return Void.class.equals(optionalTarget) ? null : optionalTarget;
+			synchronized (this) {
+
+				Class<?> existingTargetType = conversionTargets.get(targetType);
+				if (existingTargetType != null) {
+					return decodeTargetType(existingTargetType);
+				}
+
+				Class<?> computedTargetType = mappingFunction.apply(new ConvertiblePair(sourceType, targetType));
+				Map<Class<?>, Class<?>> conversionTargets = new HashMap<>(this.conversionTargets);
+				conversionTargets.put(targetType, encodeTargetType(computedTargetType));
+				this.conversionTargets = conversionTargets;
+				return computedTargetType;
+			}
+		}
+
+		private static Class<?> encodeTargetType(@Nullable Class<?> targetType) {
+			return targetType == null ? ABSENT_TARGET_TYPE : targetType;
+		}
+
+		private static @Nullable Class<?> decodeTargetType(Class<?> cachedTargetType) {
+			return ABSENT_TARGET_TYPE.equals(cachedTargetType) ? null : cachedTargetType;
 		}
 	}
 
@@ -661,6 +724,10 @@ public class CustomConversions {
 
 		Class<?> getTargetType() {
 			return delegate.getConvertiblePair().getTargetType();
+		}
+
+		ConvertiblePair getConvertiblePair() {
+			return delegate.getConvertiblePair();
 		}
 
 		public boolean isWriting() {
