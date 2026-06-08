@@ -543,6 +543,126 @@ class RepositoryFactorySupportUnitTests {
 				.hasMessageContaining("No property 'name' found for type 'Object'");
 	}
 
+	@Test
+	void callsApplicationStartupWithAllStepNamesAndTags() {
+
+		factory.getRepository(ObjectRepository.class, backingRepo);
+
+		var startup = factory.getApplicationStartup();
+
+		var orderedInvocation = Mockito.inOrder(startup);
+		orderedInvocation.verify(startup).start("spring.data.repository.init");
+		orderedInvocation.verify(startup).start("spring.data.repository.metadata");
+		orderedInvocation.verify(startup).start("spring.data.repository.composition");
+		orderedInvocation.verify(startup).start("spring.data.repository.target");
+		orderedInvocation.verify(startup).start("spring.data.repository.proxy");
+	}
+
+	@Test
+	void postProcessorReceivesProxyFactoryWithCorrectInterfaces() {
+
+		var captor = ArgumentCaptor.forClass(ProxyFactory.class);
+		factory.addRepositoryProxyPostProcessor(repositoryPostProcessor);
+		factory.getRepository(ObjectRepository.class);
+
+		verify(repositoryPostProcessor).postProcess(captor.capture(), any(RepositoryInformation.class));
+
+		var proxyFactory = captor.getValue();
+		assertThat(proxyFactory.getProxiedInterfaces())
+				.contains(ObjectRepository.class, Repository.class, TransactionalProxy.class);
+	}
+
+	@Test
+	void doesNotExposeMetadataByDefault() {
+
+		when(factory.queryOne.execute(any(Object[].class)))
+				.then(invocation -> {
+					assertThatThrownBy(RepositoryMethodContextHolder::getContext)
+							.isInstanceOf(IllegalStateException.class)
+							.hasMessageContaining("exposeMetadata");
+					return new Object();
+				});
+
+		var repository = factory.getRepository(ObjectRepository.class);
+		repository.findMetadataByLastname();
+	}
+
+	@Test
+	void adviceOrderEnsuresDefaultMethodRoutesCorrectly() {
+
+		var repository = factory.getRepository(ObjectRepository.class, customImplementation);
+
+		assertThat(repository.staticMethodDelegate()).isEqualTo("OK");
+
+		verifyNoInteractions(customImplementation);
+		verifyNoInteractions(backingRepo);
+	}
+
+	@Test
+	void adviceOrderEnsuresCustomFragmentMethodRoutesCorrectly() {
+
+		factory.addInvocationListener(invocationListener);
+
+		var repository = factory.getRepository(ObjectRepository.class, customImplementation);
+		repository.findById(1);
+
+		verify(customImplementation, times(1)).findById(1);
+		verify(backingRepo, times(0)).findById(1);
+	}
+
+	@Test
+	void repositoryInformationCacheReusesEntryForSameRepositoryAndFragments() {
+
+		factory.getRepository(ObjectRepository.class, backingRepo);
+		factory.getRepository(ObjectRepository.class, backingRepo);
+
+		Map<Object, ?> cache = (Map<Object, ?>) ReflectionTestUtils.getField(factory,
+				"repositoryInformationCache");
+
+		assertThat(cache).hasSize(1);
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void metadataThreadLocalIsRestoredAfterException() {
+
+		when(factory.queryOne.execute(any(Object[].class)))
+				.thenThrow(new RuntimeException("test exception"));
+
+		factory.setExposeMetadata(true);
+
+		var repository = factory.getRepository(ObjectRepository.class);
+
+		ThreadLocal<?> threadLocal = (ThreadLocal<?>) ReflectionTestUtils.getField(RepositoryMethodContextHolder.class, "currentMethod");
+		assertThat(threadLocal.get()).isNull();
+
+		try {
+			repository.findMetadataByLastname();
+		} catch (RuntimeException e) {
+			assertThat(e.getMessage()).isEqualTo("test exception");
+		}
+
+		assertThat(threadLocal.get()).isNull();
+	}
+
+	@Test // GH-3090
+	void metadataExposedForFragmentImplementingMetadataAccess() {
+
+		record Metadata(RepositoryMethodContext context) {
+		}
+
+		when(factory.queryOne.execute(any(Object[].class)))
+				.then(invocation -> new Metadata(RepositoryMethodContextHolder.getContext()));
+
+		var repository = factory.getRepository(ObjectRepository.class, new RepositoryMetadataAccess() {});
+		var result = repository.findMetadataByLastname();
+
+		assertThat(result).isInstanceOf(Metadata.class);
+		Metadata metadata = (Metadata) result;
+		assertThat(metadata.context().getMethod().getName()).isEqualTo("findMetadataByLastname");
+		assertThat(metadata.context().getMetadata().getDomainType()).isEqualTo(Object.class);
+	}
+
 	private ConvertingRepository prepareConvertingRepository(final Object expectedValue) {
 
 		when(factory.queryOne.execute(any(Object[].class))).then(invocation -> {
