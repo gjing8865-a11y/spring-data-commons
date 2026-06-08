@@ -22,6 +22,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
@@ -33,6 +34,7 @@ import org.springframework.data.projection.SpelAwareProxyProjectionFactory;
 import org.springframework.util.ObjectUtils;
 
 import com.jayway.jsonpath.spi.json.JsonProvider;
+import com.jayway.jsonpath.spi.mapper.MappingException;
 import com.jayway.jsonpath.spi.mapper.MappingProvider;
 
 /**
@@ -47,13 +49,22 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 
 	ProjectionFactory projectionFactory;
 	Customer customer;
+	OptionalPayload optionalPayload;
+	OptionalDefaultPaths optionalDefaultPaths;
 
 	@BeforeEach
 	void setUp() {
 
-		var json = "{\"firstname\" : \"Dave\", "//
-				+ "\"address\" : { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" }," //
-				+ "\"addresses\" : [ { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" }, { \"zipCode\" : \"69469\", \"city\" : \"Weinheim\" }]"
+		var json = "{\"firstname\" : \"Dave\", "
+				+ "\"age\" : 41, "
+				+ "\"identifier\" : 42, "
+				+ "\"active\" : true, "
+				+ "\"rating\" : 4.5, "
+				+ "\"nickname\" : null, "
+				+ "\"address\" : { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" },"
+				+ "\"nullableAddress\" : null,"
+				+ "\"addresses\" : [ { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" }, { \"zipCode\" : \"69469\", \"city\" : \"Weinheim\" }],"
+				+ "\"nullableAddresses\" : null"
 				+ " }";
 
 		var projectionFactory = new SpelAwareProxyProjectionFactory();
@@ -65,57 +76,59 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 				.registerMethodInvokerFactory(new JsonProjectingMethodInterceptorFactory(jsonProvider, mappingProvider));
 
 		this.projectionFactory = projectionFactory;
-		this.customer = projectionFactory.createProjection(Customer.class, new ByteArrayInputStream(json.getBytes()));
+		this.customer = createProjection(Customer.class, json);
+		this.optionalPayload = createProjection(OptionalPayload.class, json);
+		this.optionalDefaultPaths = createProjection(OptionalDefaultPaths.class, json);
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void accessSimpleProperty() {
 		assertThat(customer.getFirstname()).isEqualTo("Dave");
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void accessPropertyWithExplicitAnnotation() {
 		assertThat(customer.getBar()).isEqualTo("Dave");
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void accessPropertyWithComplexReturnType() {
 		assertThat(customer.getAddress()).isEqualTo(new Address("01097", "Dresden"));
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void accessComplexPropertyWithProjection() {
 		assertThat(customer.getAddressProjection().getCity()).isEqualTo("Dresden");
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void accessPropertyWithNestedJsonPath() {
 		assertThat(customer.getNestedZipCode()).isEqualTo("01097");
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void accessCollectionProperty() {
 		assertThat(customer.getAddresses().get(0)).isEqualTo(new Address("01097", "Dresden"));
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void accessPropertyOnNestedProjection() {
 		assertThat(customer.getAddressProjections().get(0).getZipCode()).isEqualTo("01097");
 	}
 
-	@Test // gh-2270
+	@Test
 	void nestedProjectionCollectionShouldContainMultipleElements() {
 		assertThat(customer.getAddressProjections()).hasSize(2);
 		assertThat(customer.getAddressProjections().get(0).getZipCode()).isEqualTo("01097");
 		assertThat(customer.getAddressProjections().get(1).getZipCode()).isEqualTo("69469");
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void accessPropertyThatUsesJsonPathProjectionInTurn() {
 		assertThat(customer.getAnotherAddressProjection().getZipCodeButNotCity()).isEqualTo("01097");
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void accessCollectionPropertyThatUsesJsonPathProjectionInTurn() {
 
 		var projections = customer.getAnotherAddressProjections();
@@ -124,7 +137,7 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 		assertThat(projections.get(0).getZipCodeButNotCity()).isEqualTo("01097");
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void accessAsCollectionPropertyThatUsesJsonPathProjectionInTurn() {
 
 		var projections = customer.getAnotherAddressProjectionAsCollection();
@@ -133,7 +146,7 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 		assertThat(projections.iterator().next().getZipCodeButNotCity()).isEqualTo("01097");
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void accessNestedPropertyButStayOnRootLevel() {
 
 		var name = customer.getName();
@@ -142,24 +155,24 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 		assertThat(name.getFirstname()).isEqualTo("Dave");
 	}
 
-	@Test // DATACMNS-885
+	@Test
 	void accessNestedFields() {
 
 		assertThat(customer.getNestedCity()).isEqualTo("Dresden");
 		assertThat(customer.getNestedCities()).hasSize(3);
 	}
 
-	@Test // DATACMNS-1144
+	@Test
 	void returnsNullForNonExistantValue() {
 		assertThat(customer.getName().getLastname()).isNull();
 	}
 
-	@Test // DATACMNS-1144
+	@Test
 	void triesMultipleDeclaredPathsIfNotAvailable() {
 		assertThat(customer.getName().getSomeName()).isEqualTo(customer.getName().getFirstname());
 	}
 
-	@Test // gh-2270
+	@Test
 	void shouldProjectOnArray() {
 
 		var json = "[ { \"creationDate\": 1610111331413, \"changeDate\": 1610111332160, \"person\": { \"caption\": \"Test2 TEST2\", \"firstName\": \"Test2\", \"lastName\": \"Test2\" } }, "
@@ -169,6 +182,97 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 				new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)));
 
 		assertThat(projection.users()).hasSize(2);
+	}
+
+	@Test
+	void returnsOptionalSimplePropertyWhenPresent() {
+		assertThat(optionalPayload.getFirstname()).hasValue("Dave");
+	}
+
+	@Test
+	void returnsEmptyOptionalForMissingSimpleProperty() {
+		assertThat(optionalPayload.getLastname()).isNotNull().isEmpty();
+	}
+
+	@Test
+	void returnsEmptyOptionalForExplicitlyNullSimpleProperty() {
+		assertThat(optionalPayload.getNickname()).isNotNull().isEmpty();
+	}
+
+	@Test
+	void convertsOptionalNumericProperties() {
+		assertThat(optionalPayload.getAge()).hasValue(41);
+		assertThat(optionalPayload.getIdentifier()).hasValue(42L);
+		assertThat(optionalPayload.getRating()).hasValue(4.5d);
+	}
+
+	@Test
+	void convertsOptionalBooleanProperty() {
+		assertThat(optionalPayload.getActive()).hasValue(true);
+	}
+
+	@Test
+	void returnsOptionalComplexDtoProperty() {
+		assertThat(optionalPayload.getAddress()).hasValue(new Address("01097", "Dresden"));
+		assertThat(optionalPayload.getNullableAddress()).isNotNull().isEmpty();
+	}
+
+	@Test
+	void returnsOptionalNestedProjectionProperty() {
+		assertThat(optionalPayload.getAddressProjection()).isPresent()
+				.get()
+				.extracting(AddressProjection::getCity)
+				.isEqualTo("Dresden");
+		assertThat(optionalPayload.getNullableAddressProjection()).isNotNull().isEmpty();
+	}
+
+	@Test
+	void returnsOptionalListOfDtos() {
+
+		var addresses = optionalPayload.getAddresses();
+
+		assertThat(addresses).isPresent();
+		assertThat(addresses.orElseThrow()).hasSize(2);
+		assertThat(addresses.orElseThrow().get(0)).isEqualTo(new Address("01097", "Dresden"));
+		assertThat(optionalPayload.getNullableAddresses()).isNotNull().isEmpty();
+	}
+
+	@Test
+	void returnsOptionalListOfNestedProjections() {
+
+		var projections = optionalPayload.getAddressProjections();
+
+		assertThat(projections).isPresent();
+		assertThat(projections.orElseThrow()).hasSize(2);
+		assertThat(projections.orElseThrow().get(0).getZipCode()).isEqualTo("01097");
+	}
+
+	@Test
+	void usesDefaultPropertyPathForOptionalMethods() {
+		assertThat(optionalDefaultPaths.getFirstname()).hasValue("Dave");
+		assertThat(optionalDefaultPaths.getAddress()).isPresent()
+				.get()
+				.extracting(AddressProjection::getZipCode)
+				.isEqualTo("01097");
+	}
+
+	@Test
+	void fallsBackToLaterJsonPathWhenFirstOneIsMissingForOptional() {
+		assertThat(optionalPayload.getSomeName()).hasValue("Dave");
+	}
+
+	@Test
+	void doesNotFallBackWhenFirstMatchingJsonPathIsExplicitNullForOptional() {
+		assertThat(optionalPayload.getNickOrName()).isNotNull().isEmpty();
+	}
+
+	@Test
+	void doesNotSwallowMappingExceptionsForOptionalHandling() {
+		assertThatExceptionOfType(MappingException.class).isThrownBy(optionalPayload::getInvalidInteger);
+	}
+
+	private <T> T createProjection(Class<T> type, String json) {
+		return projectionFactory.createProjection(type, new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)));
 	}
 
 	interface Customer {
@@ -210,6 +314,61 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 		List<String> getNestedCities();
 	}
 
+	interface OptionalPayload {
+
+		Optional<String> getFirstname();
+
+		Optional<String> getLastname();
+
+		@JsonPath("$.nickname")
+		Optional<String> getNickname();
+
+		Optional<Integer> getAge();
+
+		Optional<Long> getIdentifier();
+
+		Optional<Boolean> getActive();
+
+		Optional<Double> getRating();
+
+		@JsonPath("$.address")
+		Optional<Address> getAddress();
+
+		@JsonPath("$.nullableAddress")
+		Optional<Address> getNullableAddress();
+
+		@JsonPath("$.address")
+		Optional<AddressProjection> getAddressProjection();
+
+		@JsonPath("$.nullableAddress")
+		Optional<AddressProjection> getNullableAddressProjection();
+
+		@JsonPath("$.addresses")
+		Optional<List<Address>> getAddresses();
+
+		@JsonPath("$.nullableAddresses")
+		Optional<List<Address>> getNullableAddresses();
+
+		@JsonPath("$.addresses")
+		Optional<List<AddressProjection>> getAddressProjections();
+
+		@JsonPath({ "$.lastname", "$.firstname" })
+		Optional<String> getSomeName();
+
+		@JsonPath({ "$.nickname", "$.firstname" })
+		Optional<String> getNickOrName();
+
+		@JsonPath("$.firstname")
+		Optional<Integer> getInvalidInteger();
+	}
+
+	interface OptionalDefaultPaths {
+
+		Optional<String> getFirstname();
+
+		Optional<AddressProjection> getAddress();
+	}
+
 	interface AddressProjection {
 
 		String getZipCode();
@@ -222,12 +381,10 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 		@JsonPath("$.firstname")
 		String getFirstname();
 
-		// Not available in the payload
 		@JsonPath("$.lastname")
 		@Nullable
 		String getLastname();
 
-		// First one not available in the payload
 		@JsonPath({ "$.lastname", "$.firstname" })
 		String getSomeName();
 	}
@@ -284,9 +441,9 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 
 		interface Users {
 
-			public String getFirstName();
+			String getFirstName();
 
-			public String getLastName();
+			String getLastName();
 		}
 	}
 }

@@ -1,0 +1,700 @@
+diff --git a/src/main/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactory.java b/src/main/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactory.java
+index 6358eb63..ccd29e7a 100644
+--- a/src/main/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactory.java
++++ b/src/main/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactory.java
+@@ -26,6 +26,7 @@ import java.util.Collection;
+ import java.util.Collections;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Optional;
+ 
+ import org.aopalliance.intercept.MethodInterceptor;
+ import org.aopalliance.intercept.MethodInvocation;
+@@ -33,7 +34,6 @@ import org.jspecify.annotations.Nullable;
+ 
+ import org.springframework.core.ResolvableType;
+ import org.springframework.core.annotation.AnnotationUtils;
+-import org.springframework.data.core.TypeInformation;
+ import org.springframework.data.projection.Accessor;
+ import org.springframework.data.projection.MethodInterceptorFactory;
+ import org.springframework.util.Assert;
+@@ -152,42 +152,85 @@ public class JsonProjectingMethodInterceptorFactory implements MethodInterceptor
+ 				}
+ 			}
+ 
+-			TypeInformation<?> returnType = TypeInformation.fromReturnTypeOf(method);
+-			ResolvableType type = ResolvableType.forMethodReturnType(method);
+-			boolean isCollectionResult = type.getRawClass() != null && Collection.class.isAssignableFrom(type.getRawClass());
+-			type = isCollectionResult ? type : ResolvableType.forClassWithGenerics(List.class, type);
++			ResolvableType returnType = ResolvableType.forMethodReturnType(method);
++			ResolvableType targetType = unwrapOptional(returnType);
+ 
+-			Iterable<String> jsonPaths = getJsonPaths(method);
+-
+-			for (String jsonPath : jsonPaths) {
++			for (String jsonPath : getJsonPaths(method)) {
+ 
+ 				try {
++					return readValue(jsonPath, targetType);
++				} catch (PathNotFoundException o_O) {
++					// continue with next path
++				}
++			}
+ 
+-					if (returnType.getRequiredActualType().getType().isInterface()) {
++			return null;
++		}
+ 
+-						List<?> result = context.read(jsonPath);
+-						Object nested = result.isEmpty() ? null : result.get(0);
++		private @Nullable Object readValue(String jsonPath, ResolvableType targetType) {
+ 
+-						return isCollectionResult && !(nested instanceof Collection) ? result : nested;
+-					}
++			if (isProjectionResult(targetType)) {
++				return readProjectionResult(jsonPath, targetType);
++			}
+ 
+-					boolean definitePath = JsonPath.isPathDefinite(jsonPath);
+-					type = isCollectionResult && definitePath ? ResolvableType.forClassWithGenerics(List.class, type) : type;
++			return readMappedResult(jsonPath, targetType);
++		}
+ 
+-					List<?> result = (List<?>) context.read(jsonPath, new ResolvableTypeRef(type));
++		private @Nullable Object readProjectionResult(String jsonPath, ResolvableType targetType) {
+ 
+-					if (isCollectionResult && definitePath) {
+-						result = (List<?>) result.get(0);
+-					}
++			boolean collectionResult = isCollectionResult(targetType);
++			List<?> result = context.read(jsonPath);
++			Object nested = result.isEmpty() ? null : result.get(0);
+ 
+-					return isCollectionResult ? result : result.isEmpty() ? null : result.get(0);
++			return collectionResult && !(nested instanceof Collection) ? result : nested;
++		}
+ 
+-				} catch (PathNotFoundException o_O) {
+-					// continue with next path
+-				}
++		private @Nullable Object readMappedResult(String jsonPath, ResolvableType targetType) {
++
++			boolean collectionResult = isCollectionResult(targetType);
++			boolean definitePath = JsonPath.isPathDefinite(jsonPath);
++			ResolvableType readType = getReadType(targetType, collectionResult, definitePath);
++
++			List<?> result = (List<?>) context.read(jsonPath, new ResolvableTypeRef(readType));
++
++			if (collectionResult && definitePath) {
++				result = (List<?>) result.get(0);
+ 			}
+ 
+-			return null;
++			return collectionResult ? result : result.isEmpty() ? null : result.get(0);
++		}
++
++		private static ResolvableType unwrapOptional(ResolvableType type) {
++
++			if (!Optional.class.equals(type.resolve(Object.class))) {
++				return type;
++			}
++
++			ResolvableType nested = type.getGeneric(0);
++			return ResolvableType.NONE.equals(nested) ? ResolvableType.forClass(Object.class) : nested;
++		}
++
++		private static ResolvableType getReadType(ResolvableType targetType, boolean collectionResult,
++				boolean definitePath) {
++
++			if (!collectionResult) {
++				return ResolvableType.forClassWithGenerics(List.class, targetType);
++			}
++
++			return definitePath ? ResolvableType.forClassWithGenerics(List.class, targetType) : targetType;
++		}
++
++		private static boolean isCollectionResult(ResolvableType type) {
++			return Collection.class.isAssignableFrom(type.resolve(Object.class));
++		}
++
++		private static boolean isProjectionResult(ResolvableType type) {
++
++			if (isCollectionResult(type)) {
++				return type.getGeneric(0).resolve(Object.class).isInterface();
++			}
++
++			return type.resolve(Object.class).isInterface();
+ 		}
+ 
+ 		/**
+diff --git a/src/test/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactoryUnitTests.java b/src/test/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactoryUnitTests.java
+index 82dc4b9a..f8fc5761 100755
+--- a/src/test/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactoryUnitTests.java
++++ b/src/test/java/org/springframework/data/web/JsonProjectingMethodInterceptorFactoryUnitTests.java
+@@ -22,6 +22,7 @@ import tools.jackson.databind.ObjectMapper;
+ import java.io.ByteArrayInputStream;
+ import java.nio.charset.StandardCharsets;
+ import java.util.List;
++import java.util.Optional;
+ import java.util.Set;
+ 
+ import org.jspecify.annotations.Nullable;
+@@ -33,6 +34,7 @@ import org.springframework.data.projection.SpelAwareProxyProjectionFactory;
+ import org.springframework.util.ObjectUtils;
+ 
+ import com.jayway.jsonpath.spi.json.JsonProvider;
++import com.jayway.jsonpath.spi.mapper.MappingException;
+ import com.jayway.jsonpath.spi.mapper.MappingProvider;
+ 
+ /**
+@@ -47,13 +49,22 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
+ 
+ 	ProjectionFactory projectionFactory;
+ 	Customer customer;
++	OptionalPayload optionalPayload;
++	OptionalDefaultPaths optionalDefaultPaths;
+ 
+ 	@BeforeEach
+ 	void setUp() {
+ 
+-		var json = "{\"firstname\" : \"Dave\", "//
+-				+ "\"address\" : { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" }," //
+-				+ "\"addresses\" : [ { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" }, { \"zipCode\" : \"69469\", \"city\" : \"Weinheim\" }]"
++		var json = "{\"firstname\" : \"Dave\", "
++				+ "\"age\" : 41, "
++				+ "\"identifier\" : 42, "
++				+ "\"active\" : true, "
++				+ "\"rating\" : 4.5, "
++				+ "\"nickname\" : null, "
++				+ "\"address\" : { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" },"
++				+ "\"nullableAddress\" : null,"
++				+ "\"addresses\" : [ { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" }, { \"zipCode\" : \"69469\", \"city\" : \"Weinheim\" }],"
++				+ "\"nullableAddresses\" : null"
+ 				+ " }";
+ 
+ 		var projectionFactory = new SpelAwareProxyProjectionFactory();
+@@ -65,57 +76,59 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
+ 				.registerMethodInvokerFactory(new JsonProjectingMethodInterceptorFactory(jsonProvider, mappingProvider));
+ 
+ 		this.projectionFactory = projectionFactory;
+-		this.customer = projectionFactory.createProjection(Customer.class, new ByteArrayInputStream(json.getBytes()));
++		this.customer = createProjection(Customer.class, json);
++		this.optionalPayload = createProjection(OptionalPayload.class, json);
++		this.optionalDefaultPaths = createProjection(OptionalDefaultPaths.class, json);
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void accessSimpleProperty() {
+ 		assertThat(customer.getFirstname()).isEqualTo("Dave");
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void accessPropertyWithExplicitAnnotation() {
+ 		assertThat(customer.getBar()).isEqualTo("Dave");
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void accessPropertyWithComplexReturnType() {
+ 		assertThat(customer.getAddress()).isEqualTo(new Address("01097", "Dresden"));
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void accessComplexPropertyWithProjection() {
+ 		assertThat(customer.getAddressProjection().getCity()).isEqualTo("Dresden");
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void accessPropertyWithNestedJsonPath() {
+ 		assertThat(customer.getNestedZipCode()).isEqualTo("01097");
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void accessCollectionProperty() {
+ 		assertThat(customer.getAddresses().get(0)).isEqualTo(new Address("01097", "Dresden"));
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void accessPropertyOnNestedProjection() {
+ 		assertThat(customer.getAddressProjections().get(0).getZipCode()).isEqualTo("01097");
+ 	}
+ 
+-	@Test // gh-2270
++	@Test
+ 	void nestedProjectionCollectionShouldContainMultipleElements() {
+ 		assertThat(customer.getAddressProjections()).hasSize(2);
+ 		assertThat(customer.getAddressProjections().get(0).getZipCode()).isEqualTo("01097");
+ 		assertThat(customer.getAddressProjections().get(1).getZipCode()).isEqualTo("69469");
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void accessPropertyThatUsesJsonPathProjectionInTurn() {
+ 		assertThat(customer.getAnotherAddressProjection().getZipCodeButNotCity()).isEqualTo("01097");
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void accessCollectionPropertyThatUsesJsonPathProjectionInTurn() {
+ 
+ 		var projections = customer.getAnotherAddressProjections();
+@@ -124,7 +137,7 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
+ 		assertThat(projections.get(0).getZipCodeButNotCity()).isEqualTo("01097");
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void accessAsCollectionPropertyThatUsesJsonPathProjectionInTurn() {
+ 
+ 		var projections = customer.getAnotherAddressProjectionAsCollection();
+@@ -133,7 +146,7 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
+ 		assertThat(projections.iterator().next().getZipCodeButNotCity()).isEqualTo("01097");
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void accessNestedPropertyButStayOnRootLevel() {
+ 
+ 		var name = customer.getName();
+@@ -142,24 +155,24 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
+ 		assertThat(name.getFirstname()).isEqualTo("Dave");
+ 	}
+ 
+-	@Test // DATACMNS-885
++	@Test
+ 	void accessNestedFields() {
+ 
+ 		assertThat(customer.getNestedCity()).isEqualTo("Dresden");
+ 		assertThat(customer.getNestedCities()).hasSize(3);
+ 	}
+ 
+-	@Test // DATACMNS-1144
++	@Test
+ 	void returnsNullForNonExistantValue() {
+ 		assertThat(customer.getName().getLastname()).isNull();
+ 	}
+ 
+-	@Test // DATACMNS-1144
++	@Test
+ 	void triesMultipleDeclaredPathsIfNotAvailable() {
+ 		assertThat(customer.getName().getSomeName()).isEqualTo(customer.getName().getFirstname());
+ 	}
+ 
+-	@Test // gh-2270
++	@Test
+ 	void shouldProjectOnArray() {
+ 
+ 		var json = "[ { \"creationDate\": 1610111331413, \"changeDate\": 1610111332160, \"person\": { \"caption\": \"Test2 TEST2\", \"firstName\": \"Test2\", \"lastName\": \"Test2\" } }, "
+@@ -171,6 +184,97 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
+ 		assertThat(projection.users()).hasSize(2);
+ 	}
+ 
++	@Test
++	void returnsOptionalSimplePropertyWhenPresent() {
++		assertThat(optionalPayload.getFirstname()).hasValue("Dave");
++	}
++
++	@Test
++	void returnsEmptyOptionalForMissingSimpleProperty() {
++		assertThat(optionalPayload.getLastname()).isNotNull().isEmpty();
++	}
++
++	@Test
++	void returnsEmptyOptionalForExplicitlyNullSimpleProperty() {
++		assertThat(optionalPayload.getNickname()).isNotNull().isEmpty();
++	}
++
++	@Test
++	void convertsOptionalNumericProperties() {
++		assertThat(optionalPayload.getAge()).hasValue(41);
++		assertThat(optionalPayload.getIdentifier()).hasValue(42L);
++		assertThat(optionalPayload.getRating()).hasValue(4.5d);
++	}
++
++	@Test
++	void convertsOptionalBooleanProperty() {
++		assertThat(optionalPayload.getActive()).hasValue(true);
++	}
++
++	@Test
++	void returnsOptionalComplexDtoProperty() {
++		assertThat(optionalPayload.getAddress()).hasValue(new Address("01097", "Dresden"));
++		assertThat(optionalPayload.getNullableAddress()).isNotNull().isEmpty();
++	}
++
++	@Test
++	void returnsOptionalNestedProjectionProperty() {
++		assertThat(optionalPayload.getAddressProjection()).isPresent()
++				.get()
++				.extracting(AddressProjection::getCity)
++				.isEqualTo("Dresden");
++		assertThat(optionalPayload.getNullableAddressProjection()).isNotNull().isEmpty();
++	}
++
++	@Test
++	void returnsOptionalListOfDtos() {
++
++		var addresses = optionalPayload.getAddresses();
++
++		assertThat(addresses).isPresent();
++		assertThat(addresses.orElseThrow()).hasSize(2);
++		assertThat(addresses.orElseThrow().get(0)).isEqualTo(new Address("01097", "Dresden"));
++		assertThat(optionalPayload.getNullableAddresses()).isNotNull().isEmpty();
++	}
++
++	@Test
++	void returnsOptionalListOfNestedProjections() {
++
++		var projections = optionalPayload.getAddressProjections();
++
++		assertThat(projections).isPresent();
++		assertThat(projections.orElseThrow()).hasSize(2);
++		assertThat(projections.orElseThrow().get(0).getZipCode()).isEqualTo("01097");
++	}
++
++	@Test
++	void usesDefaultPropertyPathForOptionalMethods() {
++		assertThat(optionalDefaultPaths.getFirstname()).hasValue("Dave");
++		assertThat(optionalDefaultPaths.getAddress()).isPresent()
++				.get()
++				.extracting(AddressProjection::getZipCode)
++				.isEqualTo("01097");
++	}
++
++	@Test
++	void fallsBackToLaterJsonPathWhenFirstOneIsMissingForOptional() {
++		assertThat(optionalPayload.getSomeName()).hasValue("Dave");
++	}
++
++	@Test
++	void doesNotFallBackWhenFirstMatchingJsonPathIsExplicitNullForOptional() {
++		assertThat(optionalPayload.getNickOrName()).isNotNull().isEmpty();
++	}
++
++	@Test
++	void doesNotSwallowMappingExceptionsForOptionalHandling() {
++		assertThatExceptionOfType(MappingException.class).isThrownBy(optionalPayload::getInvalidInteger);
++	}
++
++	private <T> T createProjection(Class<T> type, String json) {
++		return projectionFactory.createProjection(type, new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)));
++	}
++
+ 	interface Customer {
+ 
+ 		String getFirstname();
+@@ -210,6 +314,61 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
+ 		List<String> getNestedCities();
+ 	}
+ 
++	interface OptionalPayload {
++
++		Optional<String> getFirstname();
++
++		Optional<String> getLastname();
++
++		@JsonPath("$.nickname")
++		Optional<String> getNickname();
++
++		Optional<Integer> getAge();
++
++		Optional<Long> getIdentifier();
++
++		Optional<Boolean> getActive();
++
++		Optional<Double> getRating();
++
++		@JsonPath("$.address")
++		Optional<Address> getAddress();
++
++		@JsonPath("$.nullableAddress")
++		Optional<Address> getNullableAddress();
++
++		@JsonPath("$.address")
++		Optional<AddressProjection> getAddressProjection();
++
++		@JsonPath("$.nullableAddress")
++		Optional<AddressProjection> getNullableAddressProjection();
++
++		@JsonPath("$.addresses")
++		Optional<List<Address>> getAddresses();
++
++		@JsonPath("$.nullableAddresses")
++		Optional<List<Address>> getNullableAddresses();
++
++		@JsonPath("$.addresses")
++		Optional<List<AddressProjection>> getAddressProjections();
++
++		@JsonPath({ "$.lastname", "$.firstname" })
++		Optional<String> getSomeName();
++
++		@JsonPath({ "$.nickname", "$.firstname" })
++		Optional<String> getNickOrName();
++
++		@JsonPath("$.firstname")
++		Optional<Integer> getInvalidInteger();
++	}
++
++	interface OptionalDefaultPaths {
++
++		Optional<String> getFirstname();
++
++		Optional<AddressProjection> getAddress();
++	}
++
+ 	interface AddressProjection {
+ 
+ 		String getZipCode();
+@@ -222,12 +381,10 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
+ 		@JsonPath("$.firstname")
+ 		String getFirstname();
+ 
+-		// Not available in the payload
+ 		@JsonPath("$.lastname")
+ 		@Nullable
+ 		String getLastname();
+ 
+-		// First one not available in the payload
+ 		@JsonPath({ "$.lastname", "$.firstname" })
+ 		String getSomeName();
+ 	}
+@@ -284,9 +441,9 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
+ 
+ 		interface Users {
+ 
+-			public String getFirstName();
++			String getFirstName();
+ 
+-			public String getLastName();
++			String getLastName();
+ 		}
+ 	}
+ }
+diff --git a/src/test/java/org/springframework/data/web/ProjectingJackson2HttpMessageConverterUnitTests.java b/src/test/java/org/springframework/data/web/ProjectingJackson2HttpMessageConverterUnitTests.java
+index 726c03d3..3fd4dc4d 100755
+--- a/src/test/java/org/springframework/data/web/ProjectingJackson2HttpMessageConverterUnitTests.java
++++ b/src/test/java/org/springframework/data/web/ProjectingJackson2HttpMessageConverterUnitTests.java
+@@ -17,7 +17,15 @@ package org.springframework.data.web;
+ 
+ import static org.assertj.core.api.Assertions.*;
+ 
++import java.io.ByteArrayInputStream;
++import java.io.InputStream;
++import java.nio.charset.StandardCharsets;
++import java.util.Optional;
++
+ import org.junit.jupiter.api.Test;
++
++import org.springframework.http.HttpHeaders;
++import org.springframework.http.HttpInputMessage;
+ import org.springframework.http.MediaType;
+ 
+ /**
+@@ -33,22 +41,36 @@ class ProjectingJackson2HttpMessageConverterUnitTests {
+ 	ProjectingJackson2HttpMessageConverter converter = new ProjectingJackson2HttpMessageConverter();
+ 	MediaType ANYTHING_JSON = MediaType.parseMediaType("application/*+json");
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void canReadJsonIntoAnnotatedInterface() {
+ 		assertThat(converter.canRead(SampleInterface.class, ANYTHING_JSON)).isTrue();
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
++	void readsProjectedPayloadWithOptionalGetter() throws Exception {
++
++		var projection = (OptionalPayload) converter.read(OptionalPayload.class, null,
++				inputMessage("{\"firstname\":\"Dave\",\"nickname\":null,\"address\":{\"city\":\"Dresden\"}}"));
++
++		assertThat(projection.getFirstname()).hasValue("Dave");
++		assertThat(projection.getNickname()).isNotNull().isEmpty();
++		assertThat(projection.getAddress()).isPresent()
++				.get()
++				.extracting(AddressProjection::getCity)
++				.isEqualTo("Dresden");
++	}
++
++	@Test
+ 	void cannotReadUnannotatedInterface() {
+ 		assertThat(converter.canRead(UnannotatedInterface.class, ANYTHING_JSON)).isFalse();
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void cannotReadClass() {
+ 		assertThat(converter.canRead(SampleClass.class, ANYTHING_JSON)).isFalse();
+ 	}
+ 
+-	@Test // DATACMNS-972
++	@Test
+ 	void doesNotConsiderTypeVariableBoundTo() throws Throwable {
+ 
+ 		var method = BaseController.class.getDeclaredMethod("createEntity", AbstractDto.class);
+@@ -57,7 +79,7 @@ class ProjectingJackson2HttpMessageConverterUnitTests {
+ 		assertThat(converter.canRead(type, BaseController.class, ANYTHING_JSON)).isFalse();
+ 	}
+ 
+-	@Test // DATACMNS-972
++	@Test
+ 	void genericTypeOnConcreteOne() throws Throwable {
+ 
+ 		var method = ConcreteController.class.getMethod("createEntity", AbstractDto.class);
+@@ -66,9 +88,39 @@ class ProjectingJackson2HttpMessageConverterUnitTests {
+ 		assertThat(converter.canRead(type, ConcreteController.class, ANYTHING_JSON)).isFalse();
+ 	}
+ 
++	private HttpInputMessage inputMessage(String json) {
++		return new HttpInputMessage() {
++			@Override
++			public InputStream getBody() {
++				return new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8));
++			}
++
++			@Override
++			public HttpHeaders getHeaders() {
++				return new HttpHeaders();
++			}
++		};
++	}
++
+ 	@ProjectedPayload
+ 	interface SampleInterface {}
+ 
++	@ProjectedPayload
++	interface OptionalPayload {
++
++		Optional<String> getFirstname();
++
++		@JsonPath("$.nickname")
++		Optional<String> getNickname();
++
++		Optional<AddressProjection> getAddress();
++	}
++
++	interface AddressProjection {
++
++		String getCity();
++	}
++
+ 	interface UnannotatedInterface {}
+ 
+ 	class SampleClass {}
+diff --git a/src/test/java/org/springframework/data/web/ProjectingJacksonHttpMessageConverterUnitTests.java b/src/test/java/org/springframework/data/web/ProjectingJacksonHttpMessageConverterUnitTests.java
+index ca782348..26c64744 100755
+--- a/src/test/java/org/springframework/data/web/ProjectingJacksonHttpMessageConverterUnitTests.java
++++ b/src/test/java/org/springframework/data/web/ProjectingJacksonHttpMessageConverterUnitTests.java
+@@ -17,9 +17,16 @@ package org.springframework.data.web;
+ 
+ import static org.assertj.core.api.Assertions.*;
+ 
++import java.io.ByteArrayInputStream;
++import java.io.InputStream;
++import java.nio.charset.StandardCharsets;
++import java.util.Optional;
++
+ import org.junit.jupiter.api.Test;
+ 
+ import org.springframework.core.ResolvableType;
++import org.springframework.http.HttpHeaders;
++import org.springframework.http.HttpInputMessage;
+ import org.springframework.http.MediaType;
+ 
+ /**
+@@ -33,22 +40,37 @@ class ProjectingJacksonHttpMessageConverterUnitTests {
+ 	ProjectingJacksonHttpMessageConverter converter = new ProjectingJacksonHttpMessageConverter();
+ 	MediaType ANYTHING_JSON = MediaType.parseMediaType("application/*+json");
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void canReadJsonIntoAnnotatedInterface() {
+ 		assertThat(converter.canRead(SampleInterface.class, ANYTHING_JSON)).isTrue();
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
++	void readsProjectedPayloadWithOptionalGetter() throws Exception {
++
++		var projection = (OptionalPayload) converter.read(ResolvableType.forClass(OptionalPayload.class),
++				inputMessage("{\"firstname\":\"Dave\",\"nickname\":null,\"address\":{\"city\":\"Dresden\"}}"),
++				null);
++
++		assertThat(projection.getFirstname()).hasValue("Dave");
++		assertThat(projection.getNickname()).isNotNull().isEmpty();
++		assertThat(projection.getAddress()).isPresent()
++				.get()
++				.extracting(AddressProjection::getCity)
++				.isEqualTo("Dresden");
++	}
++
++	@Test
+ 	void cannotReadUnannotatedInterface() {
+ 		assertThat(converter.canRead(UnannotatedInterface.class, ANYTHING_JSON)).isFalse();
+ 	}
+ 
+-	@Test // DATCMNS-885
++	@Test
+ 	void cannotReadClass() {
+ 		assertThat(converter.canRead(SampleClass.class, ANYTHING_JSON)).isFalse();
+ 	}
+ 
+-	@Test // DATACMNS-972
++	@Test
+ 	void doesNotConsiderTypeVariableBoundTo() throws Throwable {
+ 
+ 		var method = BaseController.class.getDeclaredMethod("createEntity", AbstractDto.class);
+@@ -56,7 +78,7 @@ class ProjectingJacksonHttpMessageConverterUnitTests {
+ 		assertThat(converter.canRead(ResolvableType.forMethodParameter(method, 0), ANYTHING_JSON)).isFalse();
+ 	}
+ 
+-	@Test // DATACMNS-972
++	@Test
+ 	void genericTypeOnConcreteOne() throws Throwable {
+ 
+ 		var method = ConcreteController.class.getMethod("createEntity", AbstractDto.class);
+@@ -64,9 +86,39 @@ class ProjectingJacksonHttpMessageConverterUnitTests {
+ 		assertThat(converter.canRead(ResolvableType.forMethodParameter(method, 0), ANYTHING_JSON)).isFalse();
+ 	}
+ 
++	private HttpInputMessage inputMessage(String json) {
++		return new HttpInputMessage() {
++			@Override
++			public InputStream getBody() {
++				return new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8));
++			}
++
++			@Override
++			public HttpHeaders getHeaders() {
++				return new HttpHeaders();
++			}
++		};
++	}
++
+ 	@ProjectedPayload
+ 	interface SampleInterface {}
+ 
++	@ProjectedPayload
++	interface OptionalPayload {
++
++		Optional<String> getFirstname();
++
++		@JsonPath("$.nickname")
++		Optional<String> getNickname();
++
++		Optional<AddressProjection> getAddress();
++	}
++
++	interface AddressProjection {
++
++		String getCity();
++	}
++
+ 	interface UnannotatedInterface {}
+ 
+ 	class SampleClass {}

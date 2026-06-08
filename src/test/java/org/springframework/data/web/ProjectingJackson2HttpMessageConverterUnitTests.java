@@ -17,7 +17,15 @@ package org.springframework.data.web;
 
 import static org.assertj.core.api.Assertions.*;
 
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Optional;
+
 import org.junit.jupiter.api.Test;
+
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpInputMessage;
 import org.springframework.http.MediaType;
 
 /**
@@ -33,22 +41,36 @@ class ProjectingJackson2HttpMessageConverterUnitTests {
 	ProjectingJackson2HttpMessageConverter converter = new ProjectingJackson2HttpMessageConverter();
 	MediaType ANYTHING_JSON = MediaType.parseMediaType("application/*+json");
 
-	@Test // DATCMNS-885
+	@Test
 	void canReadJsonIntoAnnotatedInterface() {
 		assertThat(converter.canRead(SampleInterface.class, ANYTHING_JSON)).isTrue();
 	}
 
-	@Test // DATCMNS-885
+	@Test
+	void readsProjectedPayloadWithOptionalGetter() throws Exception {
+
+		var projection = (OptionalPayload) converter.read(OptionalPayload.class, null,
+				inputMessage("{\"firstname\":\"Dave\",\"nickname\":null,\"address\":{\"city\":\"Dresden\"}}"));
+
+		assertThat(projection.getFirstname()).hasValue("Dave");
+		assertThat(projection.getNickname()).isNotNull().isEmpty();
+		assertThat(projection.getAddress()).isPresent()
+				.get()
+				.extracting(AddressProjection::getCity)
+				.isEqualTo("Dresden");
+	}
+
+	@Test
 	void cannotReadUnannotatedInterface() {
 		assertThat(converter.canRead(UnannotatedInterface.class, ANYTHING_JSON)).isFalse();
 	}
 
-	@Test // DATCMNS-885
+	@Test
 	void cannotReadClass() {
 		assertThat(converter.canRead(SampleClass.class, ANYTHING_JSON)).isFalse();
 	}
 
-	@Test // DATACMNS-972
+	@Test
 	void doesNotConsiderTypeVariableBoundTo() throws Throwable {
 
 		var method = BaseController.class.getDeclaredMethod("createEntity", AbstractDto.class);
@@ -57,7 +79,7 @@ class ProjectingJackson2HttpMessageConverterUnitTests {
 		assertThat(converter.canRead(type, BaseController.class, ANYTHING_JSON)).isFalse();
 	}
 
-	@Test // DATACMNS-972
+	@Test
 	void genericTypeOnConcreteOne() throws Throwable {
 
 		var method = ConcreteController.class.getMethod("createEntity", AbstractDto.class);
@@ -66,8 +88,38 @@ class ProjectingJackson2HttpMessageConverterUnitTests {
 		assertThat(converter.canRead(type, ConcreteController.class, ANYTHING_JSON)).isFalse();
 	}
 
+	private HttpInputMessage inputMessage(String json) {
+		return new HttpInputMessage() {
+			@Override
+			public InputStream getBody() {
+				return new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8));
+			}
+
+			@Override
+			public HttpHeaders getHeaders() {
+				return new HttpHeaders();
+			}
+		};
+	}
+
 	@ProjectedPayload
 	interface SampleInterface {}
+
+	@ProjectedPayload
+	interface OptionalPayload {
+
+		Optional<String> getFirstname();
+
+		@JsonPath("$.nickname")
+		Optional<String> getNickname();
+
+		Optional<AddressProjection> getAddress();
+	}
+
+	interface AddressProjection {
+
+		String getCity();
+	}
 
 	interface UnannotatedInterface {}
 

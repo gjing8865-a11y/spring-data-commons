@@ -26,6 +26,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.aopalliance.intercept.MethodInterceptor;
 import org.aopalliance.intercept.MethodInvocation;
@@ -33,7 +34,6 @@ import org.jspecify.annotations.Nullable;
 
 import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotationUtils;
-import org.springframework.data.core.TypeInformation;
 import org.springframework.data.projection.Accessor;
 import org.springframework.data.projection.MethodInterceptorFactory;
 import org.springframework.util.Assert;
@@ -152,42 +152,85 @@ public class JsonProjectingMethodInterceptorFactory implements MethodInterceptor
 				}
 			}
 
-			TypeInformation<?> returnType = TypeInformation.fromReturnTypeOf(method);
-			ResolvableType type = ResolvableType.forMethodReturnType(method);
-			boolean isCollectionResult = type.getRawClass() != null && Collection.class.isAssignableFrom(type.getRawClass());
-			type = isCollectionResult ? type : ResolvableType.forClassWithGenerics(List.class, type);
+			ResolvableType returnType = ResolvableType.forMethodReturnType(method);
+			ResolvableType targetType = unwrapOptional(returnType);
 
-			Iterable<String> jsonPaths = getJsonPaths(method);
-
-			for (String jsonPath : jsonPaths) {
+			for (String jsonPath : getJsonPaths(method)) {
 
 				try {
-
-					if (returnType.getRequiredActualType().getType().isInterface()) {
-
-						List<?> result = context.read(jsonPath);
-						Object nested = result.isEmpty() ? null : result.get(0);
-
-						return isCollectionResult && !(nested instanceof Collection) ? result : nested;
-					}
-
-					boolean definitePath = JsonPath.isPathDefinite(jsonPath);
-					type = isCollectionResult && definitePath ? ResolvableType.forClassWithGenerics(List.class, type) : type;
-
-					List<?> result = (List<?>) context.read(jsonPath, new ResolvableTypeRef(type));
-
-					if (isCollectionResult && definitePath) {
-						result = (List<?>) result.get(0);
-					}
-
-					return isCollectionResult ? result : result.isEmpty() ? null : result.get(0);
-
+					return readValue(jsonPath, targetType);
 				} catch (PathNotFoundException o_O) {
 					// continue with next path
 				}
 			}
 
 			return null;
+		}
+
+		private @Nullable Object readValue(String jsonPath, ResolvableType targetType) {
+
+			if (isProjectionResult(targetType)) {
+				return readProjectionResult(jsonPath, targetType);
+			}
+
+			return readMappedResult(jsonPath, targetType);
+		}
+
+		private @Nullable Object readProjectionResult(String jsonPath, ResolvableType targetType) {
+
+			boolean collectionResult = isCollectionResult(targetType);
+			List<?> result = context.read(jsonPath);
+			Object nested = result.isEmpty() ? null : result.get(0);
+
+			return collectionResult && !(nested instanceof Collection) ? result : nested;
+		}
+
+		private @Nullable Object readMappedResult(String jsonPath, ResolvableType targetType) {
+
+			boolean collectionResult = isCollectionResult(targetType);
+			boolean definitePath = JsonPath.isPathDefinite(jsonPath);
+			ResolvableType readType = getReadType(targetType, collectionResult, definitePath);
+
+			List<?> result = (List<?>) context.read(jsonPath, new ResolvableTypeRef(readType));
+
+			if (collectionResult && definitePath) {
+				result = (List<?>) result.get(0);
+			}
+
+			return collectionResult ? result : result.isEmpty() ? null : result.get(0);
+		}
+
+		private static ResolvableType unwrapOptional(ResolvableType type) {
+
+			if (!Optional.class.equals(type.resolve(Object.class))) {
+				return type;
+			}
+
+			ResolvableType nested = type.getGeneric(0);
+			return ResolvableType.NONE.equals(nested) ? ResolvableType.forClass(Object.class) : nested;
+		}
+
+		private static ResolvableType getReadType(ResolvableType targetType, boolean collectionResult,
+				boolean definitePath) {
+
+			if (!collectionResult) {
+				return ResolvableType.forClassWithGenerics(List.class, targetType);
+			}
+
+			return definitePath ? ResolvableType.forClassWithGenerics(List.class, targetType) : targetType;
+		}
+
+		private static boolean isCollectionResult(ResolvableType type) {
+			return Collection.class.isAssignableFrom(type.resolve(Object.class));
+		}
+
+		private static boolean isProjectionResult(ResolvableType type) {
+
+			if (isCollectionResult(type)) {
+				return type.getGeneric(0).resolve(Object.class).isInterface();
+			}
+
+			return type.resolve(Object.class).isInterface();
 		}
 
 		/**
