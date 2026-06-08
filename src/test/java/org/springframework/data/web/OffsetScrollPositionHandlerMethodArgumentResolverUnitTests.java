@@ -156,6 +156,130 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "merged"), parameter, reference);
 	}
 
+	@Test
+	void discoversOffsetWithPrefix() {
+
+		sut.setPrefix("p_");
+
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(getRequestWithParameterName("p_offset", reference), PARAMETER, reference);
+	}
+
+	@Test
+	void discoversOffsetWithPrefixAndQualifier() {
+
+		sut.setPrefix("p_");
+
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(getRequestWithParameterName("p_hello_offset", reference), parameter, reference);
+	}
+
+	@Test
+	void discoversOffsetWithPrefixAndCustomOffsetParameter() {
+
+		sut.setPrefix("p_");
+		sut.setOffsetParameter("cursor");
+
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(getRequestWithParameterName("p_cursor", reference), PARAMETER, reference);
+	}
+
+	@Test
+	void discoversOffsetWithPrefixQualifierAndCustomOffsetParameter() {
+
+		sut.setPrefix("p_");
+		sut.setOffsetParameter("cursor");
+
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(getRequestWithParameterName("p_hello_cursor", reference), parameter, reference);
+	}
+
+	@Test
+	void discoversOffsetWithPrefixQualifierAndCustomDelimiter() {
+
+		sut.setPrefix("p_");
+		sut.setOffsetParameter("cursor");
+		sut.setQualifierDelimiter(".");
+
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(getRequestWithParameterName("p_hello.cursor", reference), parameter, reference);
+	}
+
+	@Test
+	void returnsNullWithPrefixIfNotSpecified() {
+
+		sut.setPrefix("p_");
+
+		var request = new MockHttpServletRequest();
+		var position = resolveOffset(request, PARAMETER);
+
+		assertThat(position).isNull();
+	}
+
+	@Test
+	void returnsOptionalParameterWithPrefix() {
+
+		sut.setPrefix("p_");
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_offset", "5");
+		var position = resolveOffset(request, OPTIONAL_PARAMETER);
+
+		assertThat(position).isEqualTo(Optional.of(ScrollPosition.offset(5)));
+	}
+
+	@Test
+	void returnsEmptyOptionalWithPrefixIfNotSpecified() {
+
+		sut.setPrefix("p_");
+
+		var request = new MockHttpServletRequest();
+		var position = resolveOffset(request, OPTIONAL_PARAMETER);
+
+		assertThat(position).isEqualTo(Optional.empty());
+	}
+
+	@Test
+	void returnsNullForInvalidValueWithPrefix() {
+
+		sut.setPrefix("p_");
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_offset", "invalid_number");
+
+		assertThat(resolveOffset(request, PARAMETER)).isNull();
+	}
+
+	@Test
+	void returnsNullForEmptyValueWithPrefix() {
+
+		sut.setPrefix("p_");
+
+		var request = new MockHttpServletRequest();
+		request.addParameter("p_offset", "");
+
+		assertThat(resolveOffset(request, PARAMETER)).isNull();
+	}
+
+	@Test
+	void setPrefixNullResetsToDefault() {
+
+		sut.setPrefix("p_");
+		sut.setPrefix(null);
+
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(getRequestWithOffset(reference, null), PARAMETER, reference);
+	}
+
 	@Nullable
 	private Object resolveOffset(HttpServletRequest request, MethodParameter parameter) {
 		return sut.resolveArgument(parameter, null, new ServletWebRequest(request), null);
@@ -186,6 +310,14 @@ class OffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		}
 
 		String parameterName = StringUtils.hasLength(qualifier) ? qualifier + "_offset" : "offset";
+		request.addParameter(parameterName, String.valueOf(position.getOffset()));
+
+		return new ServletWebRequest(request);
+	}
+
+	private static NativeWebRequest getRequestWithParameterName(String parameterName, OffsetScrollPosition position) {
+
+		var request = new MockHttpServletRequest();
 		request.addParameter(parameterName, String.valueOf(position.getOffset()));
 
 		return new ServletWebRequest(request);

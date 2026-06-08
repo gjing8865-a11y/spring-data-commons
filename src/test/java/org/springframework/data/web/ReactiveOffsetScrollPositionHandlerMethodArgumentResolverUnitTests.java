@@ -148,6 +148,127 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		assertSupportedAndResolvedTo(getRequestWithOffset(reference, "merged"), parameter, reference);
 	}
 
+	@Test
+	void discoversOffsetWithPrefix() {
+
+		sut.setPrefix("p_");
+
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedToWithSut(getRequestWithParameterName("p_offset", reference), PARAMETER, reference);
+	}
+
+	@Test
+	void discoversOffsetWithPrefixAndQualifier() {
+
+		sut.setPrefix("p_");
+
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedToWithSut(getRequestWithParameterName("p_hello_offset", reference), parameter, reference);
+	}
+
+	@Test
+	void discoversOffsetWithPrefixAndCustomOffsetParameter() {
+
+		sut.setPrefix("p_");
+		sut.setOffsetParameter("cursor");
+
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedToWithSut(getRequestWithParameterName("p_cursor", reference), PARAMETER, reference);
+	}
+
+	@Test
+	void discoversOffsetWithPrefixQualifierAndCustomOffsetParameter() {
+
+		sut.setPrefix("p_");
+		sut.setOffsetParameter("cursor");
+
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedToWithSut(getRequestWithParameterName("p_hello_cursor", reference), parameter, reference);
+	}
+
+	@Test
+	void discoversOffsetWithPrefixQualifierAndCustomDelimiter() {
+
+		sut.setPrefix("p_");
+		sut.setOffsetParameter("cursor");
+		sut.setQualifierDelimiter(".");
+
+		var parameter = getParameterOfMethod("qualifiedOffset");
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedToWithSut(getRequestWithParameterName("p_hello.cursor", reference), parameter, reference);
+	}
+
+	@Test
+	void returnsNullWithPrefixIfNotSpecified() {
+
+		sut.setPrefix("p_");
+
+		var request = MockServerHttpRequest.get("/foo").build();
+		var position = resolveOffsetWithSut(request, PARAMETER);
+
+		assertThat(position).isNull();
+	}
+
+	@Test
+	void returnsOptionalParameterWithPrefix() {
+
+		sut.setPrefix("p_");
+
+		var request = MockServerHttpRequest.get("/foo?p_offset=5").build();
+		var position = resolveOffsetWithSut(request, OPTIONAL_PARAMETER);
+
+		assertThat(position).isEqualTo(Optional.of(ScrollPosition.offset(5)));
+	}
+
+	@Test
+	void returnsEmptyOptionalWithPrefixIfNotSpecified() {
+
+		sut.setPrefix("p_");
+
+		var request = MockServerHttpRequest.get("/foo").build();
+		var position = resolveOffsetWithSut(request, OPTIONAL_PARAMETER);
+
+		assertThat(position).isEqualTo(Optional.empty());
+	}
+
+	@Test
+	void returnsNullForInvalidValueWithPrefix() {
+
+		sut.setPrefix("p_");
+
+		var request = MockServerHttpRequest.get("/foo?p_offset=invalid_number").build();
+
+		assertThat(resolveOffsetWithSut(request, PARAMETER)).isNull();
+	}
+
+	@Test
+	void returnsNullForEmptyValueWithPrefix() {
+
+		sut.setPrefix("p_");
+
+		var request = MockServerHttpRequest.get("/foo?p_offset=").build();
+
+		assertThat(resolveOffsetWithSut(request, PARAMETER)).isNull();
+	}
+
+	@Test
+	void setPrefixNullResetsToDefault() {
+
+		sut.setPrefix("p_");
+		sut.setPrefix(null);
+
+		var reference = ScrollPosition.offset(5);
+
+		assertSupportedAndResolvedTo(getRequestWithOffset(reference, null), PARAMETER, reference);
+	}
+
 	@Nullable
 	private static Object resolveOffset(MockServerHttpRequest request, MethodParameter parameter) {
 
@@ -182,6 +303,26 @@ class ReactiveOffsetScrollPositionHandlerMethodArgumentResolverUnitTests {
 		String parameterName = StringUtils.hasLength(qualifier) ? qualifier + "_offset" : "offset";
 		return MockServerHttpRequest.get(String.format("foo?%s=%s", parameterName, String.valueOf(position.getOffset())))
 				.build();
+	}
+
+	private static MockServerHttpRequest getRequestWithParameterName(String parameterName, OffsetScrollPosition position) {
+
+		return MockServerHttpRequest.get(String.format("foo?%s=%s", parameterName, String.valueOf(position.getOffset())))
+				.build();
+	}
+
+	@Nullable
+	private Object resolveOffsetWithSut(MockServerHttpRequest request, MethodParameter parameter) {
+		return sut.resolveArgumentValue(parameter, null, MockServerWebExchange.from(request));
+	}
+
+	private void assertSupportedAndResolvedToWithSut(MockServerHttpRequest request, MethodParameter parameter,
+			OffsetScrollPosition position) {
+
+		assertThat(sut.supportsParameter(parameter)).isTrue();
+
+		var resolved = resolveOffsetWithSut(request, parameter);
+		assertThat(resolved).isEqualTo(position);
 	}
 
 	interface Controller {
