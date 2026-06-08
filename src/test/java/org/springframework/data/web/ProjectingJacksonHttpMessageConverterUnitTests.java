@@ -17,9 +17,16 @@ package org.springframework.data.web;
 
 import static org.assertj.core.api.Assertions.*;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Optional;
+
 import org.junit.jupiter.api.Test;
 
 import org.springframework.core.ResolvableType;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpInputMessage;
 import org.springframework.http.MediaType;
 
 /**
@@ -62,6 +69,58 @@ class ProjectingJacksonHttpMessageConverterUnitTests {
 		var method = ConcreteController.class.getMethod("createEntity", AbstractDto.class);
 
 		assertThat(converter.canRead(ResolvableType.forMethodParameter(method, 0), ANYTHING_JSON)).isFalse();
+	}
+
+	@Test
+	void canReadJsonIntoAnnotatedInterfaceWithOptionalGetter() {
+		assertThat(converter.canRead(SampleOptionalInterface.class, ANYTHING_JSON)).isTrue();
+	}
+
+	@Test
+	void canReadJsonIntoAnnotatedInterfaceWithOptionalGetterResolvableType() {
+		assertThat(converter.canRead(ResolvableType.forClass(SampleOptionalInterface.class), ANYTHING_JSON)).isTrue();
+	}
+
+	@Test
+	void cannotReadUnannotatedInterfaceWithOptionalGetter() {
+		assertThat(converter.canRead(UnannotatedOptionalInterface.class, ANYTHING_JSON)).isFalse();
+	}
+
+	@Test
+	void readJsonIntoAnnotatedInterfaceWithOptionalGetter() throws Exception {
+
+		var json = "{\"firstname\" : \"Dave\", \"lastname\" : \"Matthews\"}".getBytes();
+
+		HttpInputMessage inputMessage = new HttpInputMessage() {
+			@Override
+			public InputStream getBody() throws IOException {
+				return new ByteArrayInputStream(json);
+			}
+
+			@Override
+			public HttpHeaders getHeaders() {
+				return HttpHeaders.EMPTY;
+			}
+		};
+
+		var result = converter.read(ResolvableType.forClass(SampleOptionalInterface.class), inputMessage, null);
+
+		assertThat(result).isInstanceOf(SampleOptionalInterface.class);
+		assertThat(((SampleOptionalInterface) result).getFirstname()).isPresent().contains("Dave");
+		assertThat(((SampleOptionalInterface) result).getLastname()).isPresent().contains("Matthews");
+	}
+
+	@ProjectedPayload
+	interface SampleOptionalInterface {
+
+		Optional<String> getFirstname();
+
+		Optional<String> getLastname();
+	}
+
+	interface UnannotatedOptionalInterface {
+
+		Optional<String> getValue();
 	}
 
 	@ProjectedPayload

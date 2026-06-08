@@ -22,6 +22,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
@@ -171,6 +172,150 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 		assertThat(projection.users()).hasSize(2);
 	}
 
+	@Test
+	void optionalSimplePropertyPresent() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream(json().getBytes()));
+
+		assertThat(optionalCustomer.getFirstname()).isPresent().contains("Dave");
+	}
+
+	@Test
+	void optionalSimplePropertyMissing() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream("{}".getBytes()));
+
+		assertThat(optionalCustomer.getFirstname()).isNotPresent();
+	}
+
+	@Test
+	void optionalSimplePropertyExplicitlyNull() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream("{\"firstname\" : null}".getBytes()));
+
+		assertThat(optionalCustomer.getFirstname()).isNotPresent();
+	}
+
+	@Test
+	void optionalNumericPropertyConversion() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream(jsonWithNumbers().getBytes()));
+
+		assertThat(optionalCustomer.getNumber()).isPresent().contains(42);
+	}
+
+	@Test
+	void optionalBooleanPropertyConversion() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream(jsonWithNumbers().getBytes()));
+
+		assertThat(optionalCustomer.getFlag()).isPresent().contains(true);
+	}
+
+	@Test
+	void optionalComplexDtoProperty() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream(json().getBytes()));
+
+		assertThat(optionalCustomer.getAddress()).isPresent();
+		assertThat(optionalCustomer.getAddress().get().getCity()).isEqualTo("Dresden");
+	}
+
+	@Test
+	void optionalNestedProjectionProperty() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream(json().getBytes()));
+
+		assertThat(optionalCustomer.getAddressProjection()).isPresent();
+		assertThat(optionalCustomer.getAddressProjection().get().getCity()).isEqualTo("Dresden");
+	}
+
+	@Test
+	void optionalListOfDtos() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream(json().getBytes()));
+
+		assertThat(optionalCustomer.getAddresses()).isPresent();
+		assertThat(optionalCustomer.getAddresses().get()).hasSize(2);
+		assertThat(optionalCustomer.getAddresses().get().get(0)).isEqualTo(new Address("01097", "Dresden"));
+	}
+
+	@Test
+	void optionalListOfNestedProjections() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream(json().getBytes()));
+
+		assertThat(optionalCustomer.getAddressProjections()).isPresent();
+		assertThat(optionalCustomer.getAddressProjections().get()).hasSize(2);
+		assertThat(optionalCustomer.getAddressProjections().get().get(0).getZipCode()).isEqualTo("01097");
+	}
+
+	@Test
+	void optionalDefaultPropertyPathWithoutAnnotation() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream(json().getBytes()));
+
+		assertThat(optionalCustomer.getFirstname()).isPresent().contains("Dave");
+	}
+
+	@Test
+	void optionalMultiPathFallbackFirstMissing() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream(json().getBytes()));
+
+		assertThat(optionalCustomer.getName()).isPresent().contains("Dave");
+	}
+
+	@Test
+	void optionalMultiPathFallbackFirstExistsButIsNull() {
+
+		var optionalCustomer = projectionFactory.createProjection(OptionalCustomer.class,
+				new ByteArrayInputStream(jsonWithNull().getBytes()));
+
+		assertThat(optionalCustomer.getSomeName()).isNotPresent();
+	}
+
+	@Test
+	void nonOptionalBehaviorRemainsUnchanged() {
+
+		var customerFromFactory = projectionFactory.createProjection(Customer.class,
+				new ByteArrayInputStream(json().getBytes()));
+
+		assertThat(customerFromFactory.getFirstname()).isEqualTo("Dave");
+		assertThat(customerFromFactory.getAddress()).isEqualTo(new Address("01097", "Dresden"));
+		assertThat(customerFromFactory.getAddresses()).hasSize(2);
+		assertThat(customerFromFactory.getAddressProjection().getCity()).isEqualTo("Dresden");
+	}
+
+	private String json() {
+		return "{\"firstname\" : \"Dave\", "//
+				+ "\"address\" : { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" }," //
+				+ "\"addresses\" : [ { \"zipCode\" : \"01097\", \"city\" : \"Dresden\" }, { \"zipCode\" : \"69469\", \"city\" : \"Weinheim\" }]"
+				+ " }";
+	}
+
+	private String jsonWithNumbers() {
+		return "{\"firstname\" : \"Dave\", "
+				+ "\"number\" : 42, "
+				+ "\"flag\" : true "
+				+ "}";
+	}
+
+	private String jsonWithNull() {
+		return "{\"firstname\" : null }";
+	}
+
 	interface Customer {
 
 		String getFirstname();
@@ -288,5 +433,35 @@ class JsonProjectingMethodInterceptorFactoryUnitTests {
 
 			public String getLastName();
 		}
+	}
+
+	interface OptionalCustomer {
+
+		Optional<String> getFirstname();
+
+		@JsonPath("$.firstname")
+		Optional<String> getBar();
+
+		Optional<Address> getAddress();
+
+		@JsonPath("$.address")
+		Optional<AddressProjection> getAddressProjection();
+
+		Optional<List<Address>> getAddresses();
+
+		@JsonPath("$.addresses")
+		Optional<List<AddressProjection>> getAddressProjections();
+
+		@JsonPath({ "$.missing", "$.firstname" })
+		Optional<String> getName();
+
+		@JsonPath({ "$.firstname" })
+		Optional<String> getSomeName();
+
+		@JsonPath("$.number")
+		Optional<Integer> getNumber();
+
+		@JsonPath("$.flag")
+		Optional<Boolean> getFlag();
 	}
 }

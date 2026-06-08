@@ -17,7 +17,14 @@ package org.springframework.data.web;
 
 import static org.assertj.core.api.Assertions.*;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Optional;
+
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpInputMessage;
 import org.springframework.http.MediaType;
 
 /**
@@ -64,6 +71,53 @@ class ProjectingJackson2HttpMessageConverterUnitTests {
 		var type = method.getGenericParameterTypes()[0];
 
 		assertThat(converter.canRead(type, ConcreteController.class, ANYTHING_JSON)).isFalse();
+	}
+
+	@Test
+	void canReadJsonIntoAnnotatedInterfaceWithOptionalGetter() {
+		assertThat(converter.canRead(SampleOptionalInterface.class, ANYTHING_JSON)).isTrue();
+	}
+
+	@Test
+	void cannotReadUnannotatedInterfaceWithOptionalGetter() {
+		assertThat(converter.canRead(UnannotatedOptionalInterface.class, ANYTHING_JSON)).isFalse();
+	}
+
+	@Test
+	void readJsonIntoAnnotatedInterfaceWithOptionalGetter() throws Exception {
+
+		var json = "{\"firstname\" : \"Dave\", \"lastname\" : \"Matthews\"}".getBytes();
+
+		HttpInputMessage inputMessage = new HttpInputMessage() {
+			@Override
+			public InputStream getBody() throws IOException {
+				return new ByteArrayInputStream(json);
+			}
+
+			@Override
+			public HttpHeaders getHeaders() {
+				return HttpHeaders.EMPTY;
+			}
+		};
+
+		var result = converter.read(SampleOptionalInterface.class, null, inputMessage);
+
+		assertThat(result).isInstanceOf(SampleOptionalInterface.class);
+		assertThat(((SampleOptionalInterface) result).getFirstname()).isPresent().contains("Dave");
+		assertThat(((SampleOptionalInterface) result).getLastname()).isPresent().contains("Matthews");
+	}
+
+	@ProjectedPayload
+	interface SampleOptionalInterface {
+
+		Optional<String> getFirstname();
+
+		Optional<String> getLastname();
+	}
+
+	interface UnannotatedOptionalInterface {
+
+		Optional<String> getValue();
 	}
 
 	@ProjectedPayload
